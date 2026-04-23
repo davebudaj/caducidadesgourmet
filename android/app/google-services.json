@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "162147926279",
+    "project_id": "app-caducidades-51d14",
+    "storage_bucket": "app-caducidades-51d14.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:162147926279:android:1ef735e06aaa82a21a05a2",
+        "android_client_info": {
+          "package_name": "com.example.app_caducidades"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjMzO2cmMWZpRj8YYYKkbgjl4Yd_-zZQ0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:162147926279:android:5a8d5ad9da938a4e1a05a2",
+        "android_client_info": {
+          "package_name": "com.example.caducidadesgourmet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjMzO2cmMWZpRj8YYYKkbgjl4Yd_-zZQ0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

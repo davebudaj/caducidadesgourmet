@@ -1,0 +1,1493 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'firebase_options.dart';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:universal_html/html.dart' as html;
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:fl_chart/fl_chart.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  runApp(const GourmetGuardApp());
+}
+
+class EtiquetaMes {
+  static Map<int, Map<String, dynamic>> colores = {
+    1: {'nombre': 'AZUL', 'color': Colors.blue},
+    2: {'nombre': 'ROSA', 'color': Colors.pinkAccent},
+    3: {'nombre': 'AMARILLO', 'color': Colors.yellow},
+    4: {'nombre': 'VERDE', 'color': Colors.green},
+    5: {'nombre': 'NARANJA', 'color': Colors.orange},
+    6: {'nombre': 'MORADO', 'color': Colors.purple},
+    7: {'nombre': 'CELESTE', 'color': Colors.cyan},
+    8: {'nombre': 'ROJO', 'color': Colors.red},
+    9: {'nombre': 'CAFÉ', 'color': Colors.brown},
+    10: {'nombre': 'GRIS', 'color': Colors.grey},
+    11: {'nombre': 'LIMA', 'color': Colors.lightGreen},
+    12: {'nombre': 'BLANCO', 'color': Colors.white},
+  };
+
+  static Map<String, dynamic> obtener(DateTime? fecha) {
+    if (fecha == null) return {'nombre': 'NINGUNO', 'color': Colors.transparent};
+    return colores[fecha.month] ?? {'nombre': 'BLANCO', 'color': Colors.white};
+  }
+}
+
+class GourmetGuardApp extends StatelessWidget {
+  const GourmetGuardApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Gourmet Guard',
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        colorScheme: const ColorScheme.dark(primary: Colors.amber, secondary: Colors.amberAccent),
+        appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF000000), centerTitle: true),
+      ),
+      home: const EnrutadorSeguridad(),
+    );
+  }
+}
+
+class EnrutadorSeguridad extends StatelessWidget {
+  const EnrutadorSeguridad({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator(color: Colors.amber)));
+        }
+        if (snapshot.hasData) {
+          return const NavegacionPrincipal();
+        }
+        return const PantallaLogin();
+      },
+    );
+  }
+}
+
+class PantallaLogin extends StatelessWidget {
+  const PantallaLogin({super.key});
+
+  Future<void> _iniciarSesionGoogle() async {
+    try {
+      GoogleAuthProvider provider = GoogleAuthProvider();
+      await FirebaseAuth.instance.signInWithPopup(provider);
+    } catch (e) {
+      debugPrint("Error login: $e");
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(colors: [Color(0xFF121212), Color(0xFF2C2C2C)], begin: Alignment.topCenter, end: Alignment.bottomCenter)
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.shield_moon, size: 120, color: Colors.amber),
+            const SizedBox(height: 20),
+            const Text('GOURMET GUARD', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 4, color: Colors.amber)),
+            const Text('Operaciones de Retail', style: TextStyle(color: Colors.white54, fontSize: 16)),
+            const SizedBox(height: 60),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white, foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))
+              ),
+              icon: const Icon(Icons.g_mobiledata, size: 30, color: Colors.red),
+              label: const Text('Acceder con Google', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              onPressed: _iniciarSesionGoogle,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class NavegacionPrincipal extends StatefulWidget {
+  const NavegacionPrincipal({super.key});
+  @override
+  State<NavegacionPrincipal> createState() => _NavegacionPrincipalState();
+}
+
+class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
+  int _indiceActual = 0;
+  bool _esJefe = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _verificarPrivilegios();
+  }
+
+  Future<void> _verificarPrivilegios() async {
+    User? usuario = FirebaseAuth.instance.currentUser;
+    if (usuario != null) {
+      try {
+        var docUID = await FirebaseFirestore.instance.collection('colaboradores').doc(usuario.uid).get();
+        if (docUID.exists && docUID.data()?['rol'] == 'jefe') {
+          setState(() => _esJefe = true);
+          return;
+        }
+        var docCorreo = await FirebaseFirestore.instance.collection('colaboradores').where('correo', isEqualTo: usuario.email).limit(1).get();
+        if (docCorreo.docs.isNotEmpty && docCorreo.docs.first.data()['rol'] == 'jefe') {
+          setState(() => _esJefe = true);
+        }
+      } catch (e) {
+        debugPrint("Error verificando rol: $e");
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // NUEVO: Agregamos PantallaMisiones a TODOS (Piso y Jefe)
+    List<Widget> pantallas = [const PantallaEscaner(), const PantallaDashboard(), const PantallaMisiones()];
+    List<BottomNavigationBarItem> items = [
+      const BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Escanear'),
+      const BottomNavigationBarItem(icon: Icon(Icons.list_alt), label: 'Sábana'),
+      const BottomNavigationBarItem(icon: Icon(Icons.assignment_late), label: 'Misiones'),
+    ];
+
+    if (_esJefe) {
+      pantallas.add(const PantallaGraficas());
+      items.add(const BottomNavigationBarItem(icon: Icon(Icons.pie_chart), label: 'Finanzas'));
+      pantallas.add(const PantallaAdmin());
+      items.add(const BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Ajustes'));
+    }
+
+    return Scaffold(
+      body: pantallas[_indiceActual],
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _indiceActual,
+        onTap: (index) => setState(() => _indiceActual = index),
+        selectedItemColor: Colors.amber,
+        unselectedItemColor: Colors.white54,
+        backgroundColor: Colors.black,
+        items: items,
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// NUEVA PESTAÑA: MISIONES DE AUDITORÍA
+// -------------------------------------------------------------
+class PantallaMisiones extends StatelessWidget {
+  const PantallaMisiones({super.key});
+
+  void _resolverMision(BuildContext context, String missionId, Map<String, dynamic> data) {
+    TextEditingController cantidadRealController = TextEditingController();
+    DateTime fechaCad = (data['fechaCaducidad'] as Timestamp).toDate();
+    Map<String, dynamic> etiqueta = EtiquetaMes.obtener(fechaCad);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: Row(
+          children: [
+            const Icon(Icons.security, color: Colors.amber),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Misión: ${data['sku']}', style: const TextStyle(color: Colors.amber))),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(data['descripcion'], style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Text('Ve a: ${data['ubicacion']}', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Text('El sistema redujo ${data['descontado']} piezas. Revisa el mueble y busca esta etiqueta:'),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: etiqueta['color'].withOpacity(0.2), border: Border.all(color: etiqueta['color'])),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.sell, color: etiqueta['color']),
+                  const SizedBox(width: 5),
+                  Text(etiqueta['nombre'], style: TextStyle(color: etiqueta['color'], fontWeight: FontWeight.bold, fontSize: 18))
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('¿Cuántas piezas físicas encontraste con esta fecha?', style: TextStyle(fontSize: 12, color: Colors.white70)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: cantidadRealController,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10))),
+            )
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+            onPressed: () async {
+              int cantReal = int.tryParse(cantidadRealController.text) ?? 0;
+              Navigator.pop(context); // Cerramos el dialogo
+
+              // LÓGICA DE RESTAURACIÓN
+              // 1. Cerramos la misión
+              await FirebaseFirestore.instance.collection('misiones_auditoria').doc(missionId).update({'estado': 'completada', 'fechaResolucion': FieldValue.serverTimestamp()});
+              
+              // 2. Si encontraron producto (el cliente se llevó el fresco), lo regresamos a la Sábana
+              if (cantReal > 0) {
+                // Buscamos si el registro original aún existe
+                var q = await FirebaseFirestore.instance.collection('inventario_activo')
+                    .where('sku', isEqualTo: data['sku'])
+                    .where('ubicacion', isEqualTo: data['ubicacion'])
+                    .where('fechaCaducidad', isEqualTo: data['fechaCaducidad'])
+                    .limit(1).get();
+
+                if (q.docs.isNotEmpty) {
+                  // Existe, lo actualizamos
+                  await q.docs.first.reference.update({'cantidad': cantReal});
+                } else {
+                  // Lo habían borrado porque creyeron que se vendió todo, lo revivimos
+                  await FirebaseFirestore.instance.collection('inventario_activo').add({
+                    'sku': data['sku'],
+                    'descripcion': data['descripcion'],
+                    'nombreProveedor': data['nombreProveedor'],
+                    'nombreGpoArticulos': data['nombreGpoArticulos'],
+                    'precioVenta': data['precioVenta'],
+                    'ubicacion': data['ubicacion'],
+                    'cantidad': cantReal,
+                    'fechaCaducidad': data['fechaCaducidad'],
+                    'fechaCaptura': FieldValue.serverTimestamp(),
+                    'capturista': 'Auditoría Piso',
+                  });
+                }
+              }
+            },
+            child: const Text('CONFIRMAR'),
+          )
+        ],
+      )
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Misiones Pendientes', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber))),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('misiones_auditoria').where('estado', isEqualTo: 'pendiente').snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return const Center(child: Text('Error de conexión'));
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.check_circle_outline, size: 80, color: Colors.green),
+                  SizedBox(height: 20),
+                  Text('Piso Limpio. No hay auditorías pendientes.', style: TextStyle(color: Colors.white54, fontSize: 16)),
+                ],
+              ),
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: snapshot.data!.docs.length,
+            itemBuilder: (context, index) {
+              var doc = snapshot.data!.docs[index];
+              var data = doc.data() as Map<String, dynamic>;
+              DateTime fechaCad = (data['fechaCaducidad'] as Timestamp).toDate();
+              Map<String, dynamic> etiqueta = EtiquetaMes.obtener(fechaCad);
+
+              return Card(
+                color: Colors.white10,
+                margin: const EdgeInsets.only(bottom: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Colors.amber.withOpacity(0.5))),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.all(16),
+                  leading: const CircleAvatar(backgroundColor: Colors.amber, child: Icon(Icons.assignment_late, color: Colors.black)),
+                  title: Text(data['descripcion'] ?? 'ND', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Revisar: ${data['ubicacion']}', style: const TextStyle(color: Colors.greenAccent)),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(Icons.sell, size: 14, color: Colors.white54),
+                            const SizedBox(width: 4),
+                            Text('Buscar: ${etiqueta['nombre']}', style: TextStyle(color: etiqueta['color'], fontWeight: FontWeight.bold)),
+                          ],
+                        )
+                      ],
+                    ),
+                  ),
+                  trailing: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.amber, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                    onPressed: () => _resolverMision(context, doc.id, data),
+                    child: const Text('AUDITAR'),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// PANTALLA DE ESCÁNER
+// -------------------------------------------------------------
+class PantallaEscaner extends StatefulWidget {
+  const PantallaEscaner({super.key});
+  @override
+  State<PantallaEscaner> createState() => _PantallaEscanerState();
+}
+
+class _PantallaEscanerState extends State<PantallaEscaner> {
+  final TextEditingController _skuController = TextEditingController();
+  String? _ubicacionAnclada;
+  bool _procesandoPantalla = false;
+
+  void _procesarEscaneo(String codigo) {
+    if (_procesandoPantalla) return;
+    setState(() => _procesandoPantalla = true);
+    
+    String codigoLimpio = codigo.trim();
+    if (codigoLimpio.startsWith('LOC:')) {
+      setState(() {
+        _ubicacionAnclada = codigoLimpio.substring(4);
+        _skuController.clear();
+        _procesandoPantalla = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('📍 Anclado a: $_ubicacionAnclada'), backgroundColor: Colors.green));
+    } else if (codigoLimpio.isNotEmpty) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (context) => PantallaRegistro(skuEscaneado: codigoLimpio, ubicacionPredefinida: _ubicacionAnclada)
+      )).then((_) {
+        setState(() => _procesandoPantalla = false);
+      });
+      _skuController.clear();
+    } else {
+      setState(() => _procesandoPantalla = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Cámara de Inventario', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber))),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const LinearProgressIndicator(color: Colors.amber);
+                var ubicacionesMap = snapshot.data!.docs.map((d) => d['nombre'] as String).toList();
+                if (_ubicacionAnclada != null && !ubicacionesMap.contains(_ubicacionAnclada)) {
+                  ubicacionesMap.add(_ubicacionAnclada!); 
+                }
+                return DropdownButtonFormField<String?>(
+                  decoration: InputDecoration(
+                    filled: true, 
+                    fillColor: _ubicacionAnclada != null ? Colors.green.withOpacity(0.1) : Colors.white10,
+                    prefixIcon: Icon(Icons.location_on, color: _ubicacionAnclada != null ? Colors.greenAccent : Colors.amber),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide(color: _ubicacionAnclada != null ? Colors.greenAccent : Colors.transparent)),
+                  ),
+                  hint: const Text('Ubicación (Opcional)'),
+                  value: _ubicacionAnclada,
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('No fijar (Seleccionar al capturar)')),
+                    ...ubicacionesMap.map((u) => DropdownMenuItem(value: u, child: Text(u, overflow: TextOverflow.ellipsis)))
+                  ],
+                  onChanged: (val) => setState(() => _ubicacionAnclada = val),
+                );
+              }
+            ),
+          ),
+
+          Expanded(
+            flex: 2,
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.amber, width: 3),
+              ),
+              clipBehavior: Clip.hardEdge,
+              child: _procesandoPantalla 
+                ? const Center(child: CircularProgressIndicator(color: Colors.amber))
+                : MobileScanner(
+                    onDetect: (capture) {
+                      final List<Barcode> barcodes = capture.barcodes;
+                      for (final barcode in barcodes) {
+                        if (barcode.rawValue != null) {
+                          _procesarEscaneo(barcode.rawValue!);
+                          break;
+                        }
+                      }
+                    },
+                  ),
+            ),
+          ),
+          
+          const Text('Apunta al código o teclea el SKU', style: TextStyle(color: Colors.white54, fontSize: 14)),
+          const SizedBox(height: 10),
+
+          Expanded(
+            flex: 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: _skuController,
+                    keyboardType: TextInputType.text,
+                    style: const TextStyle(fontSize: 20, letterSpacing: 2),
+                    textAlign: TextAlign.center,
+                    decoration: InputDecoration(
+                      hintText: 'Teclea el SKU aquí...',
+                      filled: true, fillColor: Colors.white10,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.send, color: Colors.amber),
+                        onPressed: () => _procesarEscaneo(_skuController.text),
+                      )
+                    ),
+                    onSubmitted: _procesarEscaneo,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// PANTALLA DE REGISTRO
+// -------------------------------------------------------------
+class PantallaRegistro extends StatefulWidget {
+  final String skuEscaneado;
+  final String? ubicacionPredefinida;
+  const PantallaRegistro({super.key, required this.skuEscaneado, this.ubicacionPredefinida});
+  
+  @override
+  State<PantallaRegistro> createState() => _PantallaRegistroState();
+}
+
+class _PantallaRegistroState extends State<PantallaRegistro> {
+  DateTime? _fechaSeleccionada;
+  String? _ubicacionSeleccionada;
+  bool _guardando = false;
+  final TextEditingController _cantidadController = TextEditingController(text: "1");
+  
+  String _descripcion = "Buscando...";
+  String _almacen = "";
+  String _nombreProveedor = "";
+  String _nombreGpoArticulos = "";
+  String _oh = "";
+  String _precioVenta = "";
+  String _zonaVentas = "";
+  String _centro = "";
+  String _estadoProd = "";
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.ubicacionPredefinida != null) {
+      _ubicacionSeleccionada = widget.ubicacionPredefinida;
+    }
+    _buscarDatosOriginales();
+  }
+
+  Future<void> _buscarDatosOriginales() async {
+    try {
+      var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(widget.skuEscaneado).get();
+      if (mounted) {
+        setState(() {
+          if (doc.exists) {
+            var data = doc.data()!;
+            _descripcion = data['descripcion'] ?? "Sin Nombre";
+            _almacen = data['almacen'] ?? "ND";
+            _nombreProveedor = data['nombreProveedor'] ?? "Desconocido";
+            _nombreGpoArticulos = data['nombreGpoArticulos'] ?? "Sin categoría";
+            _oh = data['oh'] ?? "0";
+            _precioVenta = data['precioVenta'] ?? "0.00";
+            _zonaVentas = data['zonaVentas'] ?? "ND";
+            _centro = data['centro'] ?? "ND";
+            _estadoProd = data['estado'] ?? "ND";
+          } else {
+            _descripcion = "Artículo Nuevo (Sin registrar)";
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _descripcion = "Error de conexión");
+    }
+  }
+
+  Future<void> _guardarEnNube() async {
+    if (_ubicacionSeleccionada == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Selecciona una ubicación!'), backgroundColor: Colors.redAccent));
+      return;
+    }
+    int cantidadFinal = int.tryParse(_cantidadController.text) ?? 1;
+    if (cantidadFinal <= 0) cantidadFinal = 1;
+
+    setState(() => _guardando = true);
+    try {
+      await FirebaseFirestore.instance.collection('inventario_activo').add({
+        'sku': widget.skuEscaneado,
+        'descripcion': _descripcion, 
+        'nombreProveedor': _nombreProveedor,
+        'nombreGpoArticulos': _nombreGpoArticulos,
+        'precioVenta': double.tryParse(_precioVenta) ?? 0.0,
+        'ubicacion': _ubicacionSeleccionada,
+        'cantidad': cantidadFinal,
+        'fechaCaducidad': Timestamp.fromDate(_fechaSeleccionada!),
+        'fechaCaptura': FieldValue.serverTimestamp(),
+        'capturista': FirebaseAuth.instance.currentUser?.email ?? 'Desconocido',
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('¡$cantidadFinal piezas guardadas!'), backgroundColor: Colors.green));
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+        setState(() => _guardando = false);
+      }
+    }
+  }
+
+  @override
+  void dispose() { _cantidadController.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    Map<String, dynamic> infoEtiqueta = EtiquetaMes.obtener(_fechaSeleccionada);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Registrar Caducidad')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_descripcion, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.amber)),
+            const SizedBox(height: 5),
+            Text('SKU/EAN: ${widget.skuEscaneado}', style: const TextStyle(fontSize: 16, color: Colors.grey)),
+            const SizedBox(height: 15),
+            
+            if (_nombreProveedor.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.black38,
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.white10)
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.amber, size: 16),
+                        SizedBox(width: 5),
+                        Text('FICHA TÉCNICA DEL SISTEMA', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, letterSpacing: 1, fontSize: 12)),
+                      ],
+                    ),
+                    const Divider(color: Colors.white12, height: 20),
+                    Text('Centro: $_centro | Almacén: $_almacen (Zona $_zonaVentas)', style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                    const SizedBox(height: 4),
+                    Text('Nombre del Proveedor: $_nombreProveedor', style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                    const SizedBox(height: 4),
+                    Text('Gpo. Artículos: $_nombreGpoArticulos', style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                    const SizedBox(height: 4),
+                    Text('Estado: $_estadoProd', style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(color: Colors.green.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                          child: Text('Precio Venta: \$$_precioVenta', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                        ),
+                        const SizedBox(width: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(color: Colors.blue.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                          child: Text('OH: $_oh', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                        ),
+                      ],
+                    )
+                  ],
+                ),
+              ),
+
+            const Divider(height: 40, color: Colors.white24),
+            Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Piezas', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _cantidadController, keyboardType: TextInputType.number, textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                        decoration: InputDecoration(filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  flex: 5,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Ubicación Física', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const LinearProgressIndicator(color: Colors.amber);
+                          var ubicacionesMap = snapshot.data!.docs.map((d) => d['nombre'] as String).toList();
+                          if (_ubicacionSeleccionada != null && !ubicacionesMap.contains(_ubicacionSeleccionada)) {
+                            ubicacionesMap.add(_ubicacionSeleccionada!); 
+                          }
+                          return DropdownButtonFormField<String>(
+                            isExpanded: true,
+                            decoration: InputDecoration(filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none)),
+                            hint: const Text('Seleccionar'), value: _ubicacionSeleccionada,
+                            items: ubicacionesMap.map((u) => DropdownMenuItem(value: u, child: Text(u, overflow: TextOverflow.ellipsis))).toList(),
+                            onChanged: (val) => setState(() => _ubicacionSeleccionada = val),
+                          );
+                        }
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 30),
+            InkWell(
+              onTap: () async {
+                final seleccion = await showDatePicker(
+                  context: context, initialDate: DateTime.now(), firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 1800)),
+                  builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.dark(primary: Colors.amber, onPrimary: Colors.black, surface: Color(0xFF1E1E1E))), child: child!),
+                );
+                if (seleccion != null) setState(() => _fechaSeleccionada = seleccion);
+              },
+              child: Container(
+                width: double.infinity, padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(15), border: Border.all(color: _fechaSeleccionada == null ? Colors.transparent : Colors.amber, width: 2)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.calendar_month, size: 32, color: _fechaSeleccionada == null ? Colors.white54 : Colors.amber),
+                    const SizedBox(width: 16),
+                    Text(_fechaSeleccionada == null ? 'Seleccionar Fecha' : '${_fechaSeleccionada!.day}/${_fechaSeleccionada!.month}/${_fechaSeleccionada!.year}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+            
+            if (_fechaSeleccionada != null)
+              Container(
+                margin: const EdgeInsets.only(top: 20),
+                width: double.infinity,
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: infoEtiqueta['color'].withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: infoEtiqueta['color'], width: 3)
+                ),
+                child: Column(
+                  children: [
+                    const Text('PEGAR ETIQUETA VISUAL', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                    const SizedBox(height: 5),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.sell, color: infoEtiqueta['color'], size: 30),
+                        const SizedBox(width: 10),
+                        Text(infoEtiqueta['nombre'], style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: infoEtiqueta['color'])),
+                      ],
+                    )
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 40),
+            SizedBox(
+              width: double.infinity, height: 60,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                onPressed: (_fechaSeleccionada == null || _guardando) ? null : _guardarEnNube,
+                child: _guardando ? const CircularProgressIndicator(color: Colors.black) : const Text('CONFIRMAR Y GUARDAR', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// SÁBANA OPERATIVA
+// -------------------------------------------------------------
+class PantallaDashboard extends StatefulWidget {
+  const PantallaDashboard({super.key});
+  @override
+  State<PantallaDashboard> createState() => _PantallaDashboardState();
+}
+
+class _PantallaDashboardState extends State<PantallaDashboard> {
+  void _exportarExcel(List<Map<String, dynamic>> registros) {
+    if (registros.isEmpty) return;
+    String csv = "SKU,Descripcion,Cantidad,Dias_Restantes,Fecha_Caducidad,Ubicacion,Precio_Unitario,Merma_Total,Proveedor,Gpo_Articulos,Etiqueta_Color,Capturista\n";
+
+    for (var prod in registros) {
+      double precio = (prod['precioVenta'] ?? 0.0).toDouble();
+      int cantidad = prod['cantidad'] ?? 1;
+      double total = precio * cantidad;
+      DateTime cad = (prod['fechaCaducidad'] as Timestamp).toDate();
+      String fechaF = "${cad.day}/${cad.month}/${cad.year}";
+      String desc = prod['descripcion'].toString().replaceAll(',', ' ');
+      String prov = prod['nombreProveedor'].toString().replaceAll(',', ' ');
+      String gpo = prod['nombreGpoArticulos'].toString().replaceAll(',', ' ');
+      String ubi = prod['ubicacion'].toString().replaceAll(',', ' ');
+      String capturista = prod['capturista'] ?? 'ND';
+      String etiqueta = EtiquetaMes.obtener(cad)['nombre'];
+
+      csv += "${prod['sku']},$desc,$cantidad,${prod['diasRestantes']},$fechaF,$ubi,$precio,$total,$prov,$gpo,$etiqueta,$capturista\n";
+    }
+
+    final bytes = utf8.encode(csv);
+    final blob = html.Blob([bytes]);
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final anchor = html.AnchorElement(href: url)..setAttribute("download", "Reporte_Caducidades_GourmetGuard.csv")..click();
+    html.Url.revokeObjectUrl(url);
+
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Descarga Iniciada!'), backgroundColor: Colors.green));
+  }
+
+  Color _obtenerColorSemaforo(int dias) {
+    if (dias <= 7) return Colors.redAccent;
+    if (dias <= 30) return Colors.orangeAccent;
+    return Colors.greenAccent;
+  }
+
+  IconData _obtenerIconoSemaforo(int dias) {
+    if (dias <= 7) return Icons.warning_rounded;
+    if (dias <= 30) return Icons.sell;
+    return Icons.check_circle;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('inventario_activo').snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return Scaffold(appBar: AppBar(title: const Text('Visión de Piso')), body: const Center(child: Text('Error de conexión')));
+        if (snapshot.connectionState == ConnectionState.waiting) return Scaffold(appBar: AppBar(title: const Text('Visión de Piso')), body: const Center(child: CircularProgressIndicator(color: Colors.amber)));
+        
+        List<Map<String, dynamic>> registros = [];
+        if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+          registros = snapshot.data!.docs.map((doc) {
+            var data = doc.data() as Map<String, dynamic>;
+            DateTime fechaCad = (data['fechaCaducidad'] as Timestamp).toDate();
+            data['diasRestantes'] = fechaCad.difference(DateTime.now()).inDays;
+            return data;
+          }).toList();
+          registros.sort((a, b) => a['diasRestantes'].compareTo(b['diasRestantes']));
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Sábana', style: TextStyle(fontWeight: FontWeight.bold)),
+            actions: [
+              if (registros.isNotEmpty)
+                IconButton(icon: const Icon(Icons.download, color: Colors.greenAccent), tooltip: 'Exportar a Excel/CSV', onPressed: () => _exportarExcel(registros)),
+              IconButton(icon: const Icon(Icons.logout, color: Colors.white54), tooltip: 'Cerrar Sesión', onPressed: () => FirebaseAuth.instance.signOut())
+            ],
+          ),
+          body: registros.isEmpty 
+              ? const Center(child: Text('Bodega al día. No hay registros.', style: TextStyle(color: Colors.white54)))
+              : Column(
+                  children: [
+                    Builder(
+                      builder: (context) {
+                        double mermaPotencial = 0.0;
+                        int articulosEnRiesgo = 0;
+                        for (var prod in registros) {
+                          if (prod['diasRestantes'] <= 7) {
+                            mermaPotencial += ((prod['precioVenta'] ?? 0.0).toDouble() * (prod['cantidad'] ?? 1));
+                            articulosEnRiesgo += (prod['cantidad'] ?? 1) as int;
+                          }
+                        }
+                        return Container(
+                          width: double.infinity, padding: const EdgeInsets.all(20),
+                          decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF4A0000), Colors.black], begin: Alignment.topLeft, end: Alignment.bottomRight), border: Border(bottom: BorderSide(color: Colors.redAccent, width: 2))),
+                          child: Column(
+                            children: [
+                              const Text('RIESGO DE MERMA CRÍTICA (< 7 DÍAS)', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, letterSpacing: 1.5, fontSize: 12)),
+                              const SizedBox(height: 5),
+                              Text('\$${mermaPotencial.toStringAsFixed(2)}', style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.white)),
+                              Text('$articulosEnRiesgo piezas requieren salida inmediata', style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                            ],
+                          ),
+                        );
+                      }
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: registros.length,
+                        itemBuilder: (context, index) {
+                          final prod = registros[index];
+                          final color = _obtenerColorSemaforo(prod['diasRestantes']);
+                          final icono = _obtenerIconoSemaforo(prod['diasRestantes']);
+                          final int piezas = prod['cantidad'] ?? 1;
+                          
+                          DateTime fechaCaducidad = (prod['fechaCaducidad'] as Timestamp).toDate();
+                          Map<String, dynamic> infoEtiqueta = EtiquetaMes.obtener(fechaCaducidad);
+
+                          return Card(
+                            color: Colors.white10, margin: const EdgeInsets.only(bottom: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: color.withOpacity(0.5), width: 1)),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.all(16),
+                              leading: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.2), shape: BoxShape.circle), child: Icon(icono, color: color, size: 28)),
+                              title: Text(prod['descripcion'] ?? 'ND', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 8.0),
+                                child: Row(
+                                  children: [
+                                    Text('$piezas pzas • ${prod['ubicacion'] ?? 'ND'} • ', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w500)),
+                                    Icon(Icons.sell, color: infoEtiqueta['color'], size: 14),
+                                    const SizedBox(width: 4),
+                                    Text(infoEtiqueta['nombre'], style: TextStyle(color: infoEtiqueta['color'], fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                              trailing: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text('${prod['diasRestantes']}', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color)),
+                                  const Text('días', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+        );
+      },
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// FASE 6: AUDITORÍA DE PROVEEDORES (GRÁFICAS)
+// -------------------------------------------------------------
+class PantallaGraficas extends StatelessWidget {
+  const PantallaGraficas({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Auditoría de Proveedores', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('inventario_activo').snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
+          if (snapshot.data!.docs.isEmpty) return const Center(child: Text('No hay datos suficientes para graficar.'));
+
+          Map<String, double> mermaPorProveedor = {};
+          double totalGeneral = 0;
+
+          for (var doc in snapshot.data!.docs) {
+            var data = doc.data() as Map<String, dynamic>;
+            DateTime fechaCad = (data['fechaCaducidad'] as Timestamp).toDate();
+            int diasRestantes = fechaCad.difference(DateTime.now()).inDays;
+            
+            if (diasRestantes <= 30) {
+              String prov = data['nombreProveedor'] ?? 'DESCONOCIDO';
+              double precio = (data['precioVenta'] ?? 0.0).toDouble();
+              int cant = data['cantidad'] ?? 1;
+              double merma = precio * cant;
+
+              mermaPorProveedor[prov] = (mermaPorProveedor[prov] ?? 0) + merma;
+              totalGeneral += merma;
+            }
+          }
+
+          if (totalGeneral == 0) return const Center(child: Text('No hay productos en riesgo de merma (<= 30 días)', style: TextStyle(color: Colors.greenAccent)));
+
+          List<PieChartSectionData> seccionesGrafica = [];
+          List<Widget> listaDetalles = [];
+          int colorIndex = 0;
+          List<Color> paleta = [Colors.redAccent, Colors.orangeAccent, Colors.amber, Colors.blueAccent, Colors.purpleAccent, Colors.teal, Colors.pink];
+
+          var proveedoresOrdenados = mermaPorProveedor.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+
+          for (var entry in proveedoresOrdenados) {
+            Color colorAsignado = paleta[colorIndex % paleta.length];
+            double porcentaje = (entry.value / totalGeneral) * 100;
+            
+            seccionesGrafica.add(PieChartSectionData(
+              color: colorAsignado,
+              value: entry.value,
+              title: porcentaje > 3 ? '${porcentaje.toStringAsFixed(1)}%' : '',
+              radius: 60,
+              titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+            ));
+
+            listaDetalles.add(
+              ListTile(
+                leading: CircleAvatar(backgroundColor: colorAsignado, radius: 10),
+                title: Text(entry.key, style: const TextStyle(fontWeight: FontWeight.bold)),
+                trailing: Text('\$${entry.value.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, color: Colors.white)),
+              )
+            );
+            colorIndex++;
+          }
+
+          return Column(
+            children: [
+              const SizedBox(height: 20),
+              const Text('Impacto Financiero por Proveedor (Próximos 30 días)', style: TextStyle(color: Colors.white70, fontSize: 14)),
+              const SizedBox(height: 20),
+              SizedBox(
+                height: 250,
+                child: PieChart(
+                  PieChartData(
+                    sections: seccionesGrafica,
+                    centerSpaceRadius: 50,
+                    sectionsSpace: 2,
+                  )
+                ),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
+                child: Text('RIESGO TOTAL: \$${totalGeneral.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.redAccent)),
+              ),
+              const SizedBox(height: 20),
+              const Divider(color: Colors.white24),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  children: listaDetalles,
+                ),
+              )
+            ],
+          );
+        }
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// PANTALLA DE AJUSTES DEL JEFE
+// -------------------------------------------------------------
+class PantallaAdmin extends StatefulWidget {
+  const PantallaAdmin({super.key});
+  @override
+  State<PantallaAdmin> createState() => _PantallaAdminState();
+}
+
+class _PantallaAdminState extends State<PantallaAdmin> {
+  bool _procesando = false;
+  String _estado = "Listo para cargar catálogo maestro";
+  final TextEditingController _muebleController = TextEditingController();
+  final TextEditingController _correoEmpleadoController = TextEditingController();
+  String _rolSeleccionado = 'piso';
+
+  void _mostrarQR(BuildContext context, String nombreMueble) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: Text('QR: $nombreMueble', style: const TextStyle(color: Colors.amber), textAlign: TextAlign.center),
+        content: Container(
+          width: 250, height: 250, color: Colors.white, alignment: Alignment.center,
+          child: QrImageView(data: 'LOC:$nombreMueble', version: QrVersions.auto, size: 200.0),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('CERRAR', style: TextStyle(color: Colors.amber)))],
+      )
+    );
+  }
+
+  Future<void> _cargarCSV() async {
+    try {
+      FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
+      if (resultado != null && resultado.files.single.bytes != null) {
+        setState(() { _procesando = true; _estado = "Leyendo archivo y mapeando Ficha Técnica..."; });
+        final bytes = resultado.files.single.bytes!;
+        final csvString = latin1.decode(bytes); 
+        List<String> filas = const LineSplitter().convert(csvString);
+        RegExp separador = RegExp(r',(?=(?:[^"]*"[^"]*")*[^"]*$)');
+        var db = FirebaseFirestore.instance;
+        WriteBatch lote = db.batch(); 
+        int contadorSubidas = 0; int operacionesEnLote = 0;
+
+        for (var i = 1; i < filas.length; i++) {
+          if (filas[i].trim().isEmpty) continue;
+          List<String> columnas = filas[i].split(separador);
+          if (columnas.length >= 13) { 
+            String zonaVentas = columnas[0].replaceAll('"', '').trim();
+            String centro = columnas[1].replaceAll('"', '').trim();
+            String almacen = columnas[2].replaceAll('"', '').trim(); 
+            String idProveedor = columnas[3].replaceAll('"', '').trim();
+            String nombreProveedor = columnas[4].replaceAll('"', '').trim(); 
+            String idCategoria = columnas[5].replaceAll('"', '').trim();
+            String nombreGpoArticulos = columnas[6].replaceAll('"', '').trim(); 
+            String estadoProd = columnas[7].replaceAll('"', '').trim();
+            String ean = columnas[8].replaceAll('"', '').split('.')[0].trim(); 
+            String sku = columnas[9].replaceAll('"', '').split('.')[0].trim(); 
+            String descripcion = columnas[10].replaceAll('"', '').trim(); 
+            String precioVenta = columnas[11].replaceAll('"', '').trim(); 
+            String oh = columnas[12].replaceAll('"', '').trim(); 
+
+            Map<String, dynamic> dataProducto = {
+              'zonaVentas': zonaVentas, 'centro': centro, 'almacen': almacen, 'idProveedor': idProveedor,
+              'nombreProveedor': nombreProveedor, 'idCategoria': idCategoria, 'nombreGpoArticulos': nombreGpoArticulos,
+              'estado': estadoProd, 'sku': sku, 'ean': ean, 'descripcion': descripcion, 'precioVenta': precioVenta, 'oh': oh
+            };
+            
+            if (ean.isNotEmpty && ean != "0") { lote.set(db.collection('maestro_productos').doc(ean), dataProducto); operacionesEnLote++; contadorSubidas++; }
+            if (sku.isNotEmpty) { lote.set(db.collection('maestro_productos').doc(sku), dataProducto); operacionesEnLote++; contadorSubidas++; }
+            if (operacionesEnLote >= 450) { await lote.commit(); lote = db.batch(); operacionesEnLote = 0; }
+          }
+        }
+        if (operacionesEnLote > 0) { await lote.commit(); }
+        setState(() { _procesando = false; _estado = "¡Éxito Total!\nSe mapearon $contadorSubidas registros con la nueva Ficha Técnica."; });
+      }
+    } catch (e) {
+      setState(() { _procesando = false; _estado = "Ocurrió un error:\n$e"; });
+    }
+  }
+
+  Future<void> _cargarVentasCSV() async {
+    try {
+      FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
+      if (resultado != null && resultado.files.single.bytes != null) {
+        setState(() { _procesando = true; _estado = "Analizando Ventas y calculando FIFO..."; });
+        final bytes = resultado.files.single.bytes!;
+        final csvString = latin1.decode(bytes); 
+        List<String> filas = const LineSplitter().convert(csvString);
+        RegExp separador = RegExp(r',(?=(?:[^"]*"[^"]*")*[^"]*$)');
+        
+        Map<String, int> ventasProcesadas = {};
+
+        for (var i = 1; i < filas.length; i++) {
+          if (filas[i].trim().isEmpty) continue;
+          List<String> columnas = filas[i].split(separador);
+          if (columnas.length >= 2) {
+            String sku = columnas[0].replaceAll('"', '').trim();
+            int cantidadVendida = int.tryParse(columnas[1].replaceAll('"', '').trim()) ?? 0;
+            if (sku.isNotEmpty && cantidadVendida > 0) {
+              ventasProcesadas[sku] = (ventasProcesadas[sku] ?? 0) + cantidadVendida;
+            }
+          }
+        }
+
+        int misionesGeneradas = 0;
+
+        for (var sku in ventasProcesadas.keys) {
+          int porDescontar = ventasProcesadas[sku]!;
+          
+          var query = await FirebaseFirestore.instance.collection('inventario_activo')
+              .where('sku', isEqualTo: sku).orderBy('fechaCaducidad').get();
+
+          for (var doc in query.docs) {
+            if (porDescontar <= 0) break;
+
+            int cantActual = doc['cantidad'] ?? 0;
+            int descontadoAqui = 0;
+
+            if (cantActual <= porDescontar) {
+              descontadoAqui = cantActual;
+              porDescontar -= cantActual;
+              await doc.reference.delete(); 
+            } else {
+              descontadoAqui = porDescontar;
+              await doc.reference.update({'cantidad': cantActual - porDescontar});
+              porDescontar = 0;
+            }
+
+            if (descontadoAqui > 0) {
+              // Obtenemos los extras para guardarlos en la misión si los hay
+              Map<String, dynamic> data = doc.data();
+              await FirebaseFirestore.instance.collection('misiones_auditoria').add({
+                'sku': sku,
+                'descripcion': data['descripcion'] ?? 'ND',
+                'ubicacion': data['ubicacion'] ?? 'ND',
+                'descontado': descontadoAqui,
+                'fechaCaducidad': data['fechaCaducidad'], 
+                'nombreProveedor': data['nombreProveedor'] ?? 'ND',
+                'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'ND',
+                'precioVenta': data['precioVenta'] ?? 0,
+                'estado': 'pendiente',
+                'fechaGeneracion': FieldValue.serverTimestamp(),
+              });
+              misionesGeneradas++;
+            }
+          }
+        }
+        setState(() { _procesando = false; _estado = "¡Cierre Exitoso!\nSe generaron $misionesGeneradas misiones de auditoría para piso."; });
+      }
+    } catch (e) {
+      setState(() { _procesando = false; _estado = "Ocurrió un error con el reporte de ventas:\n$e"; });
+    }
+  }
+
+  Future<void> _agregarMueble() async {
+    if (_muebleController.text.trim().isNotEmpty) {
+      await FirebaseFirestore.instance.collection('ubicaciones').add({
+        'nombre': _muebleController.text.trim().toUpperCase()
+      });
+      _muebleController.clear();
+    }
+  }
+
+  Future<void> _agregarColaborador() async {
+    String correo = _correoEmpleadoController.text.trim().toLowerCase();
+    if (correo.isNotEmpty && correo.contains('@')) {
+      await FirebaseFirestore.instance.collection('colaboradores').add({
+        'correo': correo,
+        'rol': _rolSeleccionado
+      });
+      _correoEmpleadoController.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Empleado autorizado.'), backgroundColor: Colors.green));
+      }
+    }
+  }
+
+  @override
+  void dispose() { 
+    _muebleController.dispose(); 
+    _correoEmpleadoController.dispose();
+    super.dispose(); 
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Ajustes del Sistema', style: TextStyle(color: Colors.amber))),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Icon(Icons.settings_applications, size: 80, color: Colors.white24),
+              const SizedBox(height: 10),
+              Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
+              const SizedBox(height: 20),
+              
+              if (_procesando) 
+                const CircularProgressIndicator(color: Colors.amber)
+              else 
+                Column(
+                  children: [
+                    SizedBox(
+                      height: 50, width: double.infinity, 
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), 
+                        icon: const Icon(Icons.upload_file), 
+                        label: const Text('ACTUALIZAR CATÁLOGO (CSV)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), 
+                        onPressed: _cargarCSV
+                      )
+                    ),
+                    const SizedBox(height: 15),
+                    Container(
+                      decoration: BoxDecoration(
+                        boxShadow: [BoxShadow(color: Colors.greenAccent.withOpacity(0.3), blurRadius: 15, spreadRadius: 5)],
+                      ),
+                      child: SizedBox(
+                        height: 50, width: double.infinity, 
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), 
+                          icon: const Icon(Icons.point_of_sale), 
+                          label: const Text('CARGAR VENTAS DEL DÍA (CSV)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), 
+                          onPressed: _cargarVentasCSV
+                        )
+                      ),
+                    ),
+                  ],
+                ),
+              
+              const SizedBox(height: 40),
+              const Divider(color: Colors.white24),
+              const SizedBox(height: 20),
+
+              const Text('Gestión de Accesos (Gafetes)', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.amber)),
+              const SizedBox(height: 20),
+              
+              Row(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: TextField(
+                      controller: _correoEmpleadoController,
+                      decoration: InputDecoration(
+                        hintText: 'correo@gmail.com',
+                        filled: true, fillColor: Colors.white10,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 1,
+                    child: DropdownButtonFormField<String>(
+                      decoration: InputDecoration(filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)),
+                      value: _rolSeleccionado,
+                      items: const [
+                        DropdownMenuItem(value: 'piso', child: Text('Piso')),
+                        DropdownMenuItem(value: 'jefe', child: Text('Jefe')),
+                      ],
+                      onChanged: (val) => setState(() => _rolSeleccionado = val!),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                    onPressed: _agregarColaborador,
+                    child: const Icon(Icons.person_add),
+                  )
+                ],
+              ),
+
+              const SizedBox(height: 20),
+              
+              Container(
+                height: 200, 
+                decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('colaboradores').snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
+                    if (snapshot.data!.docs.isEmpty) return const Center(child: Text('Nadie autorizado.', style: TextStyle(color: Colors.white54)));
+
+                    return ListView.builder(
+                      itemCount: snapshot.data!.docs.length,
+                      itemBuilder: (context, index) {
+                        var doc = snapshot.data!.docs[index];
+                        return ListTile(
+                          leading: Icon(doc['rol'] == 'jefe' ? Icons.star : Icons.person, color: doc['rol'] == 'jefe' ? Colors.amber : Colors.white54),
+                          title: Text(doc['correo'], style: const TextStyle(fontWeight: FontWeight.w500)),
+                          trailing: IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => doc.reference.delete()),
+                        );
+                      },
+                    );
+                  }
+                ),
+              ),
+
+              const SizedBox(height: 40),
+              const Divider(color: Colors.white24),
+              const SizedBox(height: 20),
+
+              const Text('Gestión de Ubicaciones y QR', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.amber)),
+              const SizedBox(height: 20),
+              
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _muebleController,
+                      decoration: InputDecoration(
+                        hintText: 'Ej. BODEGA LACTEOS',
+                        filled: true, fillColor: Colors.white10,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                    onPressed: _agregarMueble,
+                    child: const Icon(Icons.add),
+                  )
+                ],
+              ),
+              
+              const SizedBox(height: 20),
+              
+              Container(
+                height: 250, 
+                decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
+                    if (snapshot.data!.docs.isEmpty) return const Center(child: Text('Aún no hay muebles registrados.', style: TextStyle(color: Colors.white54)));
+
+                    return ListView.builder(
+                      itemCount: snapshot.data!.docs.length,
+                      itemBuilder: (context, index) {
+                        var doc = snapshot.data!.docs[index];
+                        String nombreMueble = doc['nombre'];
+                        
+                        return ListTile(
+                          leading: const Icon(Icons.shelves, color: Colors.amber),
+                          title: Text(nombreMueble, style: const TextStyle(fontWeight: FontWeight.w500)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(icon: const Icon(Icons.qr_code, color: Colors.amberAccent), onPressed: () => _mostrarQR(context, nombreMueble), tooltip: 'Ver Código QR'),
+                              IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => doc.reference.delete()),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  }
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+// File generated by FlutterFire CLI.
+// ignore_for_file: type=lint
+import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
+
+/// Default [FirebaseOptions] for use with your Firebase apps.
+///
+/// Example:
+/// ```dart
+/// import 'firebase_options.dart';
+/// // ...
+/// await Firebase.initializeApp(
+///   options: DefaultFirebaseOptions.currentPlatform,
+/// );
+/// ```
+class DefaultFirebaseOptions {
+  static FirebaseOptions get currentPlatform {
+    if (kIsWeb) {
+      return web;
+    }
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return android;
+      case TargetPlatform.iOS:
+        return ios;
+      case TargetPlatform.macOS:
+        return macos;
+      case TargetPlatform.windows:
+        return windows;
+      case TargetPlatform.linux:
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for linux - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
+      default:
+        throw UnsupportedError(
+          'DefaultFirebaseOptions are not supported for this platform.',
+        );
+    }
+  }
+
+  static const FirebaseOptions web = FirebaseOptions(
+    apiKey: 'AIzaSyA8ZDGr1alG4QwfMSfMRP0IoFiH8kkzCGg',
+    appId: '1:162147926279:web:b5c62e7d89fd65b21a05a2',
+    messagingSenderId: '162147926279',
+    projectId: 'app-caducidades-51d14',
+    authDomain: 'app-caducidades-51d14.firebaseapp.com',
+    storageBucket: 'app-caducidades-51d14.firebasestorage.app',
+    measurementId: 'G-G5BJHG3CJW',
+  );
+
+  static const FirebaseOptions android = FirebaseOptions(
+    apiKey: 'AIzaSyBjMzO2cmMWZpRj8YYYKkbgjl4Yd_-zZQ0',
+    appId: '1:162147926279:android:5a8d5ad9da938a4e1a05a2',
+    messagingSenderId: '162147926279',
+    projectId: 'app-caducidades-51d14',
+    storageBucket: 'app-caducidades-51d14.firebasestorage.app',
+  );
+
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyCUtcGEPECEeU7qAJaqp91-IQ3T3GeKpOk',
+    appId: '1:162147926279:ios:f49c88b8acad3a361a05a2',
+    messagingSenderId: '162147926279',
+    projectId: 'app-caducidades-51d14',
+    storageBucket: 'app-caducidades-51d14.firebasestorage.app',
+    iosBundleId: 'com.example.caducidadesgourmet',
+  );
+
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'AIzaSyCUtcGEPECEeU7qAJaqp91-IQ3T3GeKpOk',
+    appId: '1:162147926279:ios:f49c88b8acad3a361a05a2',
+    messagingSenderId: '162147926279',
+    projectId: 'app-caducidades-51d14',
+    storageBucket: 'app-caducidades-51d14.firebasestorage.app',
+    iosBundleId: 'com.example.caducidadesgourmet',
+  );
+
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'AIzaSyA8ZDGr1alG4QwfMSfMRP0IoFiH8kkzCGg',
+    appId: '1:162147926279:web:7b397e47fa35832e1a05a2',
+    messagingSenderId: '162147926279',
+    projectId: 'app-caducidades-51d14',
+    authDomain: 'app-caducidades-51d14.firebaseapp.com',
+    storageBucket: 'app-caducidades-51d14.firebasestorage.app',
+    measurementId: 'G-YS1QHECEWF',
+  );
+}

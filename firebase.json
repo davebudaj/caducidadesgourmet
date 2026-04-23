@@ -1,0 +1,39 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "app-caducidades-51d14",
+          "appId": "1:162147926279:android:5a8d5ad9da938a4e1a05a2",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "app-caducidades-51d14",
+          "configurations": {
+            "android": "1:162147926279:android:5a8d5ad9da938a4e1a05a2",
+            "ios": "1:162147926279:ios:f49c88b8acad3a361a05a2",
+            "macos": "1:162147926279:ios:f49c88b8acad3a361a05a2",
+            "web": "1:162147926279:web:b5c62e7d89fd65b21a05a2",
+            "windows": "1:162147926279:web:7b397e47fa35832e1a05a2"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
