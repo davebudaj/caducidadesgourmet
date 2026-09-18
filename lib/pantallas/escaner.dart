@@ -11,11 +11,7 @@ class PantallaEscaner extends StatefulWidget {
   final bool estaActiva;
   final String usuarioRegistra;
 
-  const PantallaEscaner({
-    super.key, 
-    this.estaActiva = true, 
-    required this.usuarioRegistra
-  });
+  const PantallaEscaner({super.key, this.estaActiva = true, required this.usuarioRegistra});
 
   @override
   State<PantallaEscaner> createState() => _PantallaEscanerState();
@@ -49,14 +45,43 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
     String codigoLimpio = codigo.trim();
     
     if (codigoLimpio.startsWith('LOC:')) {
-      setState(() { _ubicacionDestino = codigoLimpio.substring(4); _skuController.clear(); });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('📍 Destino fijado: $_ubicacionDestino'), backgroundColor: Colors.green));
-      await Future.delayed(const Duration(seconds: 2)); 
+      String muebleEscaneado = codigoLimpio.substring(4);
+      if (_modoTrasvase) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.blueAccent, width: 2)),
+            title: Text('Mueble: $muebleEscaneado', style: const TextStyle(color: Colors.amber)),
+            content: const Text('¿Qué deseas hacer con este mueble?', style: TextStyle(color: Colors.white70)),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  setState(() { _ubicacionDestino = muebleEscaneado; _skuController.clear(); });
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('📍 Destino fijado: $_ubicacionDestino'), backgroundColor: Colors.green));
+                },
+                child: const Text('FIJAR COMO DESTINO', style: TextStyle(color: Colors.greenAccent))
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+                icon: const Icon(Icons.outbox),
+                label: const Text('EXTRAER'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _abrirMultiSelectPorMueble(muebleEscaneado);
+                }
+              )
+            ],
+          )
+        );
+      } else {
+        setState(() { _ubicacionDestino = muebleEscaneado; _skuController.clear(); });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('📍 Destino fijado: $_ubicacionDestino'), backgroundColor: Colors.green));
+      }
     } else if (codigoLimpio.isNotEmpty) {
       if (_modoTrasvase) {
-        // YA NO BLOQUEA SI EL DESTINO ES NULO, PERMITE ESCANEAR LIBREMENTE
         _seleccionarOrigenYCantidad(codigoLimpio);
-        await Future.delayed(const Duration(seconds: 2));
       } else {
         await Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaRegistro(skuEscaneado: codigoLimpio, ubicacionPredefinida: _ubicacionDestino, usuarioRegistra: widget.usuarioRegistra)));
       }
@@ -68,16 +93,37 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
 
   void _seleccionarOrigenYCantidad(String codigoBuscado) async {
     var snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('sku', isEqualTo: codigoBuscado).get();
-    
-    if (snapshot.docs.isEmpty) {
-      snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('ean', isEqualTo: codigoBuscado).get();
-    }
-    
+    if (snapshot.docs.isEmpty) snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('ean', isEqualTo: codigoBuscado).get();
     if (snapshot.docs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay existencias registradas en piso.'), backgroundColor: Colors.redAccent));
       return;
     }
+    _mostrarBottomSheetMultiSelect(snapshot.docs, 'Selección Múltiple', 'Código: $codigoBuscado');
+  }
 
+  // AQUÍ ESTÁ LA CORRECCIÓN: Ordenamos los datos localmente en lugar de pedírselo a Firebase
+  void _abrirMultiSelectPorMueble(String nombreMueble) async {
+    try {
+      var snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('ubicacion', isEqualTo: nombreMueble).get();
+      if (snapshot.docs.isEmpty) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('El mueble "$nombreMueble" está vacío.'), backgroundColor: Colors.orangeAccent));
+        return;
+      }
+      
+      var docsOrdenados = snapshot.docs;
+      docsOrdenados.sort((a, b) {
+        Timestamp tA = (a.data())['fechaCaducidad'] ?? Timestamp.now();
+        Timestamp tB = (b.data())['fechaCaducidad'] ?? Timestamp.now();
+        return tA.compareTo(tB);
+      });
+
+      _mostrarBottomSheetMultiSelect(docsOrdenados, 'Contenido de Mueble', 'Extrayendo de: $nombreMueble');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent));
+    }
+  }
+
+  void _mostrarBottomSheetMultiSelect(List<QueryDocumentSnapshot> docsList, String titulo, String subtitulo) {
     if (!mounted) return;
 
     showModalBottomSheet(
@@ -85,30 +131,27 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       isScrollControlled: true,
       backgroundColor: const Color(0xFF1E1E1E),
       builder: (context) {
-        // Mapa para recordar cuántas piezas quiere el usuario de CADA lote escaneado
         Map<String, int> cantidadesSeleccionadas = {};
-        for (var doc in snapshot.docs) {
-          cantidadesSeleccionadas[doc.id] = 0; // Inicia en 0 para todos
-        }
+        for (var doc in docsList) cantidadesSeleccionadas[doc.id] = 0;
 
         return StatefulBuilder(
           builder: (context, setModalState) {
             return Container(
-              height: MediaQuery.of(context).size.height * 0.75, // 75% de la pantalla
+              height: MediaQuery.of(context).size.height * 0.75,
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  const Text('Selección Múltiple de Lotes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
+                  Text(titulo, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
                   const SizedBox(height: 5),
-                  Text('Código: $codigoBuscado', style: const TextStyle(color: Colors.white70)),
+                  Text(subtitulo, style: const TextStyle(color: Colors.white70)),
                   const Divider(color: Colors.white24),
                   
                   Expanded(
                     child: ListView.builder(
-                      itemCount: snapshot.docs.length,
+                      itemCount: docsList.length,
                       itemBuilder: (context, i) {
-                        var doc = snapshot.docs[i];
-                        var d = doc.data();
+                        var doc = docsList[i];
+                        var d = doc.data() as Map<String, dynamic>;
                         String docId = doc.id;
                         DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
                         String ubicacion = d['ubicacion'] ?? 'Desconocida';
@@ -151,7 +194,6 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                                         ],
                                       ),
                                     ),
-                                    // CONTROLES DE CANTIDAD
                                     Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -191,7 +233,6 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                   ),
                   
                   const SizedBox(height: 10),
-                  // BOTÓN LISTO
                   SizedBox(
                     width: double.infinity,
                     height: 55,
@@ -201,29 +242,23 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                       label: const Text('LISTO (AL CARRITO)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       onPressed: () {
                         int agregados = 0;
-                        setState(() { // Actualizamos la pantalla principal (el carrito)
-                          for (var doc in snapshot.docs) {
+                        setState(() {
+                          for (var doc in docsList) {
                             String docId = doc.id;
                             int qty = cantidadesSeleccionadas[docId] ?? 0;
                             if (qty > 0) {
-                              var d = doc.data();
+                              var d = doc.data() as Map<String, dynamic>;
                               _carrito.add(ItemCarrito(
-                                idOriginal: docId,
-                                sku: d['sku'],
-                                descripcion: d['descripcion'] ?? "ND",
-                                cantidadEnCarrito: qty,
-                                fechaCaducidad: (d['fechaCaducidad'] as Timestamp).toDate(),
-                                ubicacionOrigen: d['ubicacion'] ?? 'Desconocida',
-                                datosOriginales: d,
+                                idOriginal: docId, sku: d['sku'], descripcion: d['descripcion'] ?? "ND",
+                                cantidadEnCarrito: qty, fechaCaducidad: (d['fechaCaducidad'] as Timestamp).toDate(),
+                                ubicacionOrigen: d['ubicacion'] ?? 'Desconocida', datosOriginales: d,
                               ));
                               agregados++;
                             }
                           }
                         });
-                        Navigator.pop(context); // Cierra la pestaña
-                        if (agregados > 0) {
-                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('¡$agregados lotes agregados al carrito!'), backgroundColor: Colors.green));
-                        }
+                        Navigator.pop(context);
+                        if (agregados > 0) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('¡$agregados lotes agregados al carrito!'), backgroundColor: Colors.green));
                       },
                     ),
                   )
@@ -237,7 +272,6 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   }
 
   Future<void> _repartirCarga() async {
-    // EL BLOQUEO DEL MUEBLE DESTINO SOLO SE HACE CUANDO QUIERES GUARDAR
     if (_ubicacionDestino == null || _ubicacionDestino == "Sin anclar") {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Alto! Selecciona el MUEBLE DESTINO arriba antes de dejar la mercancía.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), backgroundColor: Colors.redAccent));
       return;
@@ -358,24 +392,11 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                   ),
                 ),
                 if (_modoTrasvase && _ubicacionDestino != null && _ubicacionDestino != "Sin anclar") 
-                  IconButton(icon: const Icon(Icons.download, color: Colors.blueAccent), tooltip: "Jalar todo el mueble al carrito", onPressed: () async {
-                    var snap = await FirebaseFirestore.instance.collection('inventario_activo').where('ubicacion', isEqualTo: _ubicacionDestino).get();
-                    if(snap.docs.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El mueble está vacío.'))); return; }
-                    for(var doc in snap.docs) {
-                      var d = doc.data();
-                      setState(() {
-                        _carrito.add(ItemCarrito(
-                          idOriginal: doc.id,
-                          sku: d['sku'],
-                          descripcion: d['descripcion'] ?? "ND",
-                          cantidadEnCarrito: d['cantidad'],
-                          fechaCaducidad: (d['fechaCaducidad'] as Timestamp).toDate(),
-                          ubicacionOrigen: _ubicacionDestino!,
-                          datosOriginales: d,
-                        ));
-                      });
-                    }
-                  })
+                  IconButton(
+                    icon: const Icon(Icons.outbox, color: Colors.blueAccent), 
+                    tooltip: "Extraer mercancía de este mueble", 
+                    onPressed: () => _abrirMultiSelectPorMueble(_ubicacionDestino!)
+                  )
               ],
             ),
           ),

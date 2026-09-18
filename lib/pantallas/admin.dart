@@ -15,11 +15,10 @@ class PantallaAdmin extends StatefulWidget {
 
 class _PantallaAdminState extends State<PantallaAdmin> {
   final TextEditingController _muebleController = TextEditingController();
-  final TextEditingController _correoEmpleadoController = TextEditingController();
-  
-  // Controladores para usuarios
   final TextEditingController _numEmpleadoController = TextEditingController();
   final TextEditingController _nombreUsuarioController = TextEditingController();
+  
+  String _prefijoMueble = 'PISO';
   String _rolSeleccionado = 'piso';
   
   bool _procesando = false;
@@ -106,24 +105,49 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         RegExp separador = RegExp(r',(?=(?:[^"]*"[^"]*")*[^"]*$)');
         Map<String, int> ventasProcesadas = {};
 
-        for (var i = 1; i < filas.length; i++) {
+        for (var i = 3; i < filas.length; i++) {
           if (filas[i].trim().isEmpty) continue;
           List<String> columnas = filas[i].split(separador);
           if (columnas.length >= 2) {
             String sku = columnas[0].replaceAll('"', '').trim();
             int cantVendida = int.tryParse(columnas[1].replaceAll('"', '').trim()) ?? 0;
-            if (sku.isNotEmpty && cantVendida > 0) ventasProcesadas[sku] = (ventasProcesadas[sku] ?? 0) + cantVendida;
+            if (sku.isNotEmpty && cantVendida > 0) {
+              ventasProcesadas[sku] = (ventasProcesadas[sku] ?? 0) + cantVendida;
+            }
           }
         }
 
-        int misiones = 0;
+        int misionesNuevas = 0;
+        int misionesActualizadas = 0;
+
         for (var sku in ventasProcesadas.keys) {
           int porDescontar = ventasProcesadas[sku]!;
-          var query = await FirebaseFirestore.instance.collection('inventario_activo').where('sku', isEqualTo: sku).orderBy('fechaCaducidad').get();
+          
+          var querySnap = await FirebaseFirestore.instance.collection('inventario_activo').where('sku', isEqualTo: sku).get();
+          var docsOrdenados = querySnap.docs.toList();
+          docsOrdenados.sort((a, b) {
+            var dataA = a.data() as Map<String, dynamic>;
+            var dataB = b.data() as Map<String, dynamic>;
+            
+            String ubiA = (dataA['ubicacion'] ?? '').toString().toUpperCase();
+            String ubiB = (dataB['ubicacion'] ?? '').toString().toUpperCase();
+            
+            // Prioridad 0: PISO o DISPLAY. Prioridad 1: BODEGA
+            int prioA = ubiA.contains('BODEGA') ? 1 : 0;
+            int prioB = ubiB.contains('BODEGA') ? 1 : 0;
+            
+            if (prioA != prioB) return prioA.compareTo(prioB); // Descuenta de PISO primero
+            
+            // Si están en el mismo tipo de mueble, descuenta el más viejo
+            Timestamp tA = dataA['fechaCaducidad'] ?? Timestamp.now();
+            Timestamp tB = dataB['fechaCaducidad'] ?? Timestamp.now();
+            return tA.compareTo(tB);
+          });
 
-          for (var doc in query.docs) {
+          for (var doc in docsOrdenados) {
             if (porDescontar <= 0) break;
-            int cantActual = doc['cantidad'] ?? 0;
+            var data = doc.data() as Map<String, dynamic>;
+            int cantActual = data['cantidad'] ?? 0;
             int descAqui = (cantActual <= porDescontar) ? cantActual : porDescontar;
             porDescontar -= descAqui;
 
@@ -131,19 +155,38 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             else await doc.reference.update({'cantidad': cantActual - descAqui});
 
             if (descAqui > 0) {
-              var data = doc.data();
-              await FirebaseFirestore.instance.collection('misiones_auditoria').add({
-                'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
-                'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
-                'nombreProveedor': data['nombreProveedor'] ?? 'ND',
-                'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
-                'fechaGeneracion': FieldValue.serverTimestamp(),
-              });
-              misiones++;
+              // LÓGICA ANTI-DUPLICADOS
+              var misionesP = await FirebaseFirestore.instance.collection('misiones_auditoria')
+                  .where('estado', isEqualTo: 'pendiente')
+                  .where('sku', isEqualTo: sku)
+                  .get();
+                  
+              var misionMatchea = misionesP.docs.where((m) {
+                  var md = m.data();
+                  return md['ubicacion'] == data['ubicacion'] && md['fechaCaducidad'] == data['fechaCaducidad'] && md['descontado'] != null; 
+              }).toList();
+
+              if (misionMatchea.isNotEmpty) {
+                  var docMision = misionMatchea.first;
+                  int descAnterior = docMision['descontado'] ?? 0;
+                  await docMision.reference.update({
+                      'descontado': descAnterior + descAqui,
+                      'fechaGeneracion': FieldValue.serverTimestamp() // Sube a lo más reciente
+                  });
+                  misionesActualizadas++;
+              } else {
+                  await FirebaseFirestore.instance.collection('misiones_auditoria').add({
+                    'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
+                    'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
+                    'nombreProveedor': data['nombreProveedor'] ?? 'ND', 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                    'fechaGeneracion': FieldValue.serverTimestamp(),
+                  });
+                  misionesNuevas++;
+              }
             }
           }
         }
-        setState(() { _procesando = false; _estado = "¡Cierre Exitoso!\nSe generaron $misiones misiones para piso."; });
+        setState(() { _procesando = false; _estado = "¡Cierre Exitoso!\nMisiones Nuevas: $misionesNuevas | Actualizadas: $misionesActualizadas"; });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
   }
@@ -151,7 +194,29 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Centro de Mando', style: TextStyle(fontSize: 16)), actions: [Padding(padding: const EdgeInsets.all(8.0), child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black), icon: const Icon(Icons.cloud_download, size: 18), label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)), onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6JPS3QRZFIZMX', '_blank'); } ))]),
+      appBar: AppBar(
+        title: const Text('Centro de Mando', style: TextStyle(fontSize: 16)), 
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
+              icon: const Icon(Icons.cloud_download, size: 16), 
+              label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
+              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6JPS3QRZFIZMX', '_blank'); } 
+            )
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 8.0, right: 8.0),
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
+              icon: const Icon(Icons.point_of_sale, size: 16), 
+              label: const Text('SAP VENTAS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
+              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank'); } 
+            )
+          )
+        ]
+      ),
       body: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(32.0),
@@ -169,13 +234,35 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
               
-              // SECCIÓN: MUEBLES
               const Text('Gestión de Ubicaciones (Muebles)', style: TextStyle(fontSize: 18, color: Colors.amber)),
               const SizedBox(height: 15),
               Row(children: [
-                Expanded(child: TextField(controller: _muebleController, decoration: InputDecoration(hintText: 'Ej. Góndola 1', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)))),
+                Container(
+                  height: 55, padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      dropdownColor: const Color(0xFF2C2C2C),
+                      value: _prefijoMueble,
+                      items: ['PISO', 'BODEGA', 'DISPLAY'].map((String val) => DropdownMenuItem(value: val, child: Text(val, style: const TextStyle(fontWeight: FontWeight.bold)))).toList(),
+                      onChanged: (val) => setState(() => _prefijoMueble = val!),
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 10),
-                ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: () async { if (_muebleController.text.isNotEmpty) { await FirebaseFirestore.instance.collection('ubicaciones').add({'nombre': _muebleController.text.trim().toUpperCase()}); _muebleController.clear(); } }, child: const Icon(Icons.add))
+                Expanded(child: TextField(controller: _muebleController, decoration: InputDecoration(hintText: 'Ej. MESA DE TE', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)))),
+                const SizedBox(width: 10),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), 
+                  onPressed: () async { 
+                    if (_muebleController.text.isNotEmpty) { 
+                      String nombreFinal = '$_prefijoMueble ${_muebleController.text.trim().toUpperCase()}';
+                      await FirebaseFirestore.instance.collection('ubicaciones').add({'nombre': nombreFinal}); 
+                      _muebleController.clear(); 
+                    } 
+                  }, 
+                  child: const Icon(Icons.add)
+                )
               ]),
               const SizedBox(height: 15),
               Container(
@@ -208,7 +295,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
 
-              // SECCIÓN: USUARIOS
               const Text('Gestión de Usuarios', style: TextStyle(fontSize: 18, color: Colors.amber)),
               const SizedBox(height: 15),
               Row(
