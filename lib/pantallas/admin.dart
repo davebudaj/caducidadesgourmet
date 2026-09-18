@@ -16,7 +16,12 @@ class PantallaAdmin extends StatefulWidget {
 class _PantallaAdminState extends State<PantallaAdmin> {
   final TextEditingController _muebleController = TextEditingController();
   final TextEditingController _correoEmpleadoController = TextEditingController();
+  
+  // Controladores para usuarios
+  final TextEditingController _numEmpleadoController = TextEditingController();
+  final TextEditingController _nombreUsuarioController = TextEditingController();
   String _rolSeleccionado = 'piso';
+  
   bool _procesando = false;
   String _estado = "Listo para cargar archivos CSV";
   final GlobalKey _qrKey = GlobalKey(); 
@@ -130,6 +135,8 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               await FirebaseFirestore.instance.collection('misiones_auditoria').add({
                 'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
                 'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
+                'nombreProveedor': data['nombreProveedor'] ?? 'ND',
+                'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
                 'fechaGeneracion': FieldValue.serverTimestamp(),
               });
               misiones++;
@@ -161,6 +168,8 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const SizedBox(height: 40),
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
+              
+              // SECCIÓN: MUEBLES
               const Text('Gestión de Ubicaciones (Muebles)', style: TextStyle(fontSize: 18, color: Colors.amber)),
               const SizedBox(height: 15),
               Row(children: [
@@ -170,7 +179,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               ]),
               const SizedBox(height: 15),
               Container(
-                height: 250, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
+                height: 200, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
                   builder: (context, snapshot) {
@@ -193,6 +202,81 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                     );
                   }
                 ),
+              ),
+
+              const SizedBox(height: 40),
+              const Divider(color: Colors.white24),
+              const SizedBox(height: 20),
+
+              // SECCIÓN: USUARIOS
+              const Text('Gestión de Usuarios', style: TextStyle(fontSize: 18, color: Colors.amber)),
+              const SizedBox(height: 15),
+              Row(
+                children: [
+                  Expanded(flex: 1, child: TextField(controller: _numEmpleadoController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: '# Empleado', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)))),
+                  const SizedBox(width: 10),
+                  Expanded(flex: 2, child: TextField(controller: _nombreUsuarioController, decoration: InputDecoration(hintText: 'Nombre y Apellido', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)))),
+                ]
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: _rolSeleccionado,
+                      decoration: InputDecoration(filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)),
+                      dropdownColor: const Color(0xFF2C2C2C),
+                      items: const [
+                        DropdownMenuItem(value: 'piso', child: Text('Colaborador (Piso)')),
+                        DropdownMenuItem(value: 'jefe', child: Text('Jefe / Administrador')),
+                      ],
+                      onChanged: (val) => setState(() => _rolSeleccionado = val!),
+                    )
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                    onPressed: () async {
+                      if (_numEmpleadoController.text.isNotEmpty && _nombreUsuarioController.text.isNotEmpty) {
+                        await FirebaseFirestore.instance.collection('colaboradores').doc(_numEmpleadoController.text.trim()).set({
+                          'nombre': _nombreUsuarioController.text.trim(),
+                          'rol': _rolSeleccionado,
+                        });
+                        _numEmpleadoController.clear();
+                        _nombreUsuarioController.clear();
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Usuario guardado exitosamente', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+                      } else {
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Llene todos los campos'), backgroundColor: Colors.redAccent));
+                      }
+                    },
+                    child: const Icon(Icons.person_add)
+                  )
+                ]
+              ),
+              const SizedBox(height: 15),
+              Container(
+                 height: 250, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
+                 child: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance.collection('colaboradores').snapshots(),
+                    builder: (context, snapshot) {
+                       if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                       if (snapshot.data!.docs.isEmpty) return const Center(child: Text("Sin usuarios registrados", style: TextStyle(color: Colors.white54)));
+                       return ListView.builder(
+                          itemCount: snapshot.data!.docs.length,
+                          itemBuilder: (context, index) {
+                             var doc = snapshot.data!.docs[index];
+                             var data = doc.data() as Map<String, dynamic>;
+                             bool esJefe = data['rol'] == 'jefe';
+                             return ListTile(
+                                leading: Icon(esJefe ? Icons.security : Icons.person, color: esJefe ? Colors.amber : Colors.blueAccent),
+                                title: Text(data['nombre'] ?? 'Sin nombre', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                subtitle: Text('Emp: ${doc.id} • Rol: ${data['rol']}'.toUpperCase(), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                trailing: IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => doc.reference.delete()),
+                             );
+                          }
+                       );
+                    }
+                 )
               )
             ],
           ),

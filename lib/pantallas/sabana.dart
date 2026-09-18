@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:convert';
 import 'package:universal_html/html.dart' as html;
+import 'package:mobile_scanner/mobile_scanner.dart'; // Agregado para el escáner
 
 import '../modelos/etiqueta_mes.dart';
 
@@ -133,6 +134,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                          'sku': d['sku'],
                          'descripcion': d['descripcion'],
                          'nombreProveedor': d['nombreProveedor'] ?? 'ND',
+                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
                          'ubicacion': d['ubicacion'],
                          'cantidadTratada': cantATratar,
                          'motivo': motivoSeleccionado,
@@ -466,6 +470,23 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       decoration: InputDecoration(
                         hintText: 'Buscar SKU o Artículo...',
                         prefixIcon: const Icon(Icons.search, color: Colors.amber),
+                        
+                        // EL BOTÓN DEL ESCÁNER HA SIDO AÑADIDO AQUÍ COMO SUFFIX ICON
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
+                          tooltip: 'Escanear Código',
+                          onPressed: () async {
+                             String? codigoEscaneado = await Navigator.push(
+                               context, 
+                               MaterialPageRoute(builder: (context) => const PantallaEscanerRapido())
+                             );
+                             if (codigoEscaneado != null && codigoEscaneado.isNotEmpty) {
+                                _busquedaController.text = codigoEscaneado;
+                                setState(() => _busqueda = codigoEscaneado.toLowerCase());
+                             }
+                          }
+                        ),
+                        
                         filled: true, fillColor: Colors.white10,
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
                         contentPadding: const EdgeInsets.symmetric(vertical: 0)
@@ -552,6 +573,35 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               ),
             ],
           );
+        },
+      ),
+    );
+  }
+}
+
+// Nueva pantalla anidada para manejar el escaneo rápido sin salir de la Sábana
+class PantallaEscanerRapido extends StatefulWidget {
+  const PantallaEscanerRapido({super.key});
+
+  @override
+  State<PantallaEscanerRapido> createState() => _PantallaEscanerRapidoState();
+}
+
+class _PantallaEscanerRapidoState extends State<PantallaEscanerRapido> {
+  bool _yaEscaneado = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Escanear SKU para buscar', style: TextStyle(color: Colors.amber))),
+      body: MobileScanner(
+        onDetect: (capture) {
+          if (_yaEscaneado) return; // Evita que lea 10 veces en un segundo
+          final barcode = capture.barcodes.first;
+          if (barcode.rawValue != null) {
+            setState(() => _yaEscaneado = true);
+            Navigator.pop(context, barcode.rawValue);
+          }
         },
       ),
     );
