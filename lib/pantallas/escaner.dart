@@ -54,11 +54,8 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       await Future.delayed(const Duration(seconds: 2)); 
     } else if (codigoLimpio.isNotEmpty) {
       if (_modoTrasvase) {
-        if (_ubicacionDestino == null) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ Primero selecciona o escanea el MUEBLE DESTINO arriba.'), backgroundColor: Colors.orangeAccent));
-        } else {
-          _seleccionarOrigenYCantidad(codigoLimpio);
-        }
+        // YA NO BLOQUEA SI EL DESTINO ES NULO, PERMITE ESCANEAR LIBREMENTE
+        _seleccionarOrigenYCantidad(codigoLimpio);
         await Future.delayed(const Duration(seconds: 2));
       } else {
         await Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaRegistro(skuEscaneado: codigoLimpio, ubicacionPredefinida: _ubicacionDestino, usuarioRegistra: widget.usuarioRegistra)));
@@ -87,161 +84,168 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF1E1E1E),
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.7,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const Text('Selecciona el Lote de Origen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
-            const SizedBox(height: 5),
-            Text('Código: $codigoBuscado', style: const TextStyle(color: Colors.white70)),
-            const Divider(),
-            Expanded(
-              child: ListView.builder(
-                itemCount: snapshot.docs.length,
-                itemBuilder: (context, i) {
-                  var d = snapshot.docs[i].data();
-                  DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
-                  String ubicacion = d['ubicacion'] ?? 'Desconocida';
-                  String fechaFormateada = "${cad.day.toString().padLeft(2,'0')}/${cad.month.toString().padLeft(2,'0')}/${cad.year}";
+      builder: (context) {
+        // Mapa para recordar cuántas piezas quiere el usuario de CADA lote escaneado
+        Map<String, int> cantidadesSeleccionadas = {};
+        for (var doc in snapshot.docs) {
+          cantidadesSeleccionadas[doc.id] = 0; // Inicia en 0 para todos
+        }
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.75, // 75% de la pantalla
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  const Text('Selección Múltiple de Lotes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
+                  const SizedBox(height: 5),
+                  Text('Código: $codigoBuscado', style: const TextStyle(color: Colors.white70)),
+                  const Divider(color: Colors.white24),
                   
-                  return Card(
-                    color: Colors.white10,
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    child: ListTile(
-                      // AQUÍ ESTÁ EL NUEVO BOTÓN DE LLEVAR TODO
-                      leading: GestureDetector(
-                        onTap: () {
-                          Navigator.pop(context);
-                          _agregarTodoAlCarrito(snapshot.docs[i].id, d, ubicacion);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: EtiquetaMes.obtener(cad)['color'].withOpacity(0.2),
-                            border: Border.all(color: EtiquetaMes.obtener(cad)['color'], width: 1.5),
-                            borderRadius: BorderRadius.circular(10)
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: snapshot.docs.length,
+                      itemBuilder: (context, i) {
+                        var doc = snapshot.docs[i];
+                        var d = doc.data();
+                        String docId = doc.id;
+                        DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+                        String ubicacion = d['ubicacion'] ?? 'Desconocida';
+                        String fechaFormateada = "${cad.day.toString().padLeft(2,'0')}/${cad.month.toString().padLeft(2,'0')}/${cad.year}";
+                        
+                        int maximoPermitido = d['cantidad'] ?? 0;
+                        int cantActual = cantidadesSeleccionadas[docId] ?? 0;
+                        bool seleccionado = cantActual > 0;
+
+                        return Card(
+                          color: seleccionado ? Colors.blueAccent.withOpacity(0.15) : Colors.white10,
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: seleccionado ? Colors.blueAccent : Colors.transparent, width: 2)
                           ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.done_all, color: EtiquetaMes.obtener(cad)['color'], size: 20),
-                              Text('LLEVAR\nTODO', textAlign: TextAlign.center, style: TextStyle(color: EtiquetaMes.obtener(cad)['color'], fontSize: 9, fontWeight: FontWeight.bold)),
-                            ],
+                          child: Padding(
+                            padding: const EdgeInsets.all(12.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.inventory_2, color: EtiquetaMes.obtener(cad)['color'], size: 18),
+                                    const SizedBox(width: 8),
+                                    Expanded(child: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text('📍 Origen: $ubicacion', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                                          Text('📅 Cad: $fechaFormateada', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                          Text('📦 Disponible: $maximoPermitido pzas', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                        ],
+                                      ),
+                                    ),
+                                    // CONTROLES DE CANTIDAD
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (cantActual < maximoPermitido)
+                                          InkWell(
+                                            onTap: () => setModalState(() => cantidadesSeleccionadas[docId] = maximoPermitido),
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                              decoration: BoxDecoration(color: Colors.amber.withOpacity(0.2), borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.amber)),
+                                              child: const Text('TODO', style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
+                                            ),
+                                          ),
+                                        const SizedBox(width: 5),
+                                        IconButton(
+                                          icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 28),
+                                          padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                                          onPressed: cantActual > 0 ? () => setModalState(() => cantidadesSeleccionadas[docId] = cantActual - 1) : null,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(cantActual.toString().padLeft(2, '0'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 28),
+                                          padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                                          onPressed: cantActual < maximoPermitido ? () => setModalState(() => cantidadesSeleccionadas[docId] = cantActual + 1) : null,
+                                        ),
+                                      ],
+                                    )
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ),
-                      title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('📍 Mueble: $ubicacion', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
-                            const SizedBox(height: 2),
-                            Text('📅 Caducidad: $fechaFormateada', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
-                            const SizedBox(height: 2),
-                            Text('📦 Existencia: ${d['cantidad']} piezas', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.add_shopping_cart, color: Colors.blueAccent, size: 28),
-                        tooltip: 'Elegir cantidad manual',
-                        onPressed: () {
-                          Navigator.pop(context); 
-                          _pedirCantidad(snapshot.docs[i].id, d, ubicacion); 
-                        },
-                      ),
-                      onTap: () {
-                        Navigator.pop(context); 
-                        _pedirCantidad(snapshot.docs[i].id, d, ubicacion); 
+                        );
                       },
                     ),
-                  );
-                },
+                  ),
+                  
+                  const SizedBox(height: 10),
+                  // BOTÓN LISTO
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                      icon: const Icon(Icons.check_circle, size: 24),
+                      label: const Text('LISTO (AL CARRITO)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      onPressed: () {
+                        int agregados = 0;
+                        setState(() { // Actualizamos la pantalla principal (el carrito)
+                          for (var doc in snapshot.docs) {
+                            String docId = doc.id;
+                            int qty = cantidadesSeleccionadas[docId] ?? 0;
+                            if (qty > 0) {
+                              var d = doc.data();
+                              _carrito.add(ItemCarrito(
+                                idOriginal: docId,
+                                sku: d['sku'],
+                                descripcion: d['descripcion'] ?? "ND",
+                                cantidadEnCarrito: qty,
+                                fechaCaducidad: (d['fechaCaducidad'] as Timestamp).toDate(),
+                                ubicacionOrigen: d['ubicacion'] ?? 'Desconocida',
+                                datosOriginales: d,
+                              ));
+                              agregados++;
+                            }
+                          }
+                        });
+                        Navigator.pop(context); // Cierra la pestaña
+                        if (agregados > 0) {
+                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('¡$agregados lotes agregados al carrito!'), backgroundColor: Colors.green));
+                        }
+                      },
+                    ),
+                  )
+                ],
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _agregarTodoAlCarrito(String docId, Map<String, dynamic> data, String origen) {
-    int maximoPermitido = data['cantidad'] ?? 0;
-    if (maximoPermitido > 0) {
-      setState(() {
-        _carrito.add(ItemCarrito(
-          idOriginal: docId,
-          sku: data['sku'],
-          descripcion: data['descripcion'] ?? "ND",
-          cantidadEnCarrito: maximoPermitido,
-          fechaCaducidad: (data['fechaCaducidad'] as Timestamp).toDate(),
-          ubicacionOrigen: origen,
-          datosOriginales: data,
-        ));
-      });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote completo ($maximoPermitido pzas) agregado al carrito'), backgroundColor: Colors.green));
-    }
-  }
-
-  void _pedirCantidad(String docId, Map<String, dynamic> data, String origen) {
-    TextEditingController c = TextEditingController(text: "1");
-    int maximoPermitido = data['cantidad'] ?? 0;
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2C2C2C),
-        title: Text('Moviendo de $origen', style: const TextStyle(color: Colors.amber, fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Llevando a: $_ubicacionDestino', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            TextField(controller: c, keyboardType: TextInputType.number, autofocus: true, decoration: InputDecoration(labelText: 'Piezas (Máx. $maximoPermitido)', filled: true, fillColor: Colors.black45)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-            onPressed: () {
-              int cant = int.tryParse(c.text) ?? 0;
-              if (cant > 0 && cant <= maximoPermitido) {
-                setState(() {
-                  _carrito.add(ItemCarrito(
-                    idOriginal: docId,
-                    sku: data['sku'],
-                    descripcion: data['descripcion'] ?? "ND",
-                    cantidadEnCarrito: cant,
-                    fechaCaducidad: (data['fechaCaducidad'] as Timestamp).toDate(),
-                    ubicacionOrigen: origen,
-                    datosOriginales: data,
-                  ));
-                });
-                Navigator.pop(context);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solo puedes mover hasta $maximoPermitido piezas.'), backgroundColor: Colors.red));
-              }
-            },
-            child: const Text('AL CARRITO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          )
-        ],
-      )
+            );
+          }
+        );
+      },
     );
   }
 
   Future<void> _repartirCarga() async {
-    if (_ubicacionDestino == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Escanea el MUEBLE DE DESTINO'), backgroundColor: Colors.redAccent));
+    // EL BLOQUEO DEL MUEBLE DESTINO SOLO SE HACE CUANDO QUIERES GUARDAR
+    if (_ubicacionDestino == null || _ubicacionDestino == "Sin anclar") {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Alto! Selecciona el MUEBLE DESTINO arriba antes de dejar la mercancía.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), backgroundColor: Colors.redAccent));
       return;
     }
+    
     var seleccionados = _carrito.where((item) => item.seleccionadoParaMover).toList();
     if (seleccionados.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Toca los productos del carrito que dejarás aquí.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Toca los productos del carrito que vas a dejar aquí.')));
       return;
     }
 
@@ -275,7 +279,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       }
     }
     setState(() { _carrito.removeWhere((item) => item.seleccionadoParaMover); });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Trasvase exitoso!'), backgroundColor: Colors.green));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Trasvase guardado exitosamente!'), backgroundColor: Colors.green));
   }
 
   @override
@@ -324,13 +328,13 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                         height: 56,
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         decoration: BoxDecoration(
-                          color: _ubicacionDestino != null ? Colors.green.withOpacity(0.1) : Colors.white10,
+                          color: (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar") ? Colors.green.withOpacity(0.1) : Colors.white10,
                           borderRadius: BorderRadius.circular(15),
-                          border: Border.all(color: _ubicacionDestino != null ? Colors.greenAccent : Colors.white24)
+                          border: Border.all(color: (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar") ? Colors.greenAccent : Colors.white24)
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.location_on, color: _ubicacionDestino != null ? Colors.greenAccent : Colors.white54),
+                            Icon(Icons.location_on, color: (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar") ? Colors.greenAccent : Colors.white54),
                             const SizedBox(width: 10),
                             Expanded(
                               child: DropdownButtonHideUnderline(
@@ -353,7 +357,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                     }
                   ),
                 ),
-                if (_modoTrasvase && _ubicacionDestino != null) 
+                if (_modoTrasvase && _ubicacionDestino != null && _ubicacionDestino != "Sin anclar") 
                   IconButton(icon: const Icon(Icons.download, color: Colors.blueAccent), tooltip: "Jalar todo el mueble al carrito", onPressed: () async {
                     var snap = await FirebaseFirestore.instance.collection('inventario_activo').where('ubicacion', isEqualTo: _ubicacionDestino).get();
                     if(snap.docs.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El mueble está vacío.'))); return; }
@@ -518,7 +522,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
   @override
   void initState() {
     super.initState();
-    if (widget.ubicacionPredefinida != null) { _ubicacionSeleccionada = widget.ubicacionPredefinida; }
+    if (widget.ubicacionPredefinida != null && widget.ubicacionPredefinida != "Sin anclar") { _ubicacionSeleccionada = widget.ubicacionPredefinida; }
     _buscarDatosOriginales();
   }
   
