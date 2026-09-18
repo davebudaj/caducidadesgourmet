@@ -563,7 +563,17 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis),
                               subtitle: Padding(
                                 padding: const EdgeInsets.only(top: 4),
-                                child: Text(d['cantidad'].toString() + ' pzas • Ubicación: ' + d['ubicacion'].toString(), style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(d['cantidad'].toString() + ' pzas • Ubicación: ' + d['ubicacion'].toString(), style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    if (d['comentarioCorporativo'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text('INSTRUCCIÓN: ${d['comentarioCorporativo']}', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                      )
+                                  ],
+                                ),
                               ),
                               trailing: const Icon(Icons.info_outline, color: Colors.white54),
                             ),

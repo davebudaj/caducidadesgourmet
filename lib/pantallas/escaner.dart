@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../modelos/item_carrito.dart';
 import '../modelos/etiqueta_mes.dart';
+import 'ingreso.dart';
 
 class PantallaEscaner extends StatefulWidget {
   final bool estaActiva;
@@ -28,7 +29,6 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   
   late AnimationController _laserController;
   late Animation<double> _laserAnimation;
-  DateTime? _ultimoEscaneo;
   bool _bloquearEscaneo = false;
 
   @override
@@ -109,22 +109,51 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                     color: Colors.white10,
                     margin: const EdgeInsets.symmetric(vertical: 6),
                     child: ListTile(
-                      leading: Icon(Icons.outbox, color: EtiquetaMes.obtener(cad)['color'], size: 30),
-                      title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      // AQUÍ ESTÁ EL NUEVO BOTÓN DE LLEVAR TODO
+                      leading: GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _agregarTodoAlCarrito(snapshot.docs[i].id, d, ubicacion);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: EtiquetaMes.obtener(cad)['color'].withOpacity(0.2),
+                            border: Border.all(color: EtiquetaMes.obtener(cad)['color'], width: 1.5),
+                            borderRadius: BorderRadius.circular(10)
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.done_all, color: EtiquetaMes.obtener(cad)['color'], size: 20),
+                              Text('LLEVAR\nTODO', textAlign: TextAlign.center, style: TextStyle(color: EtiquetaMes.obtener(cad)['color'], fontSize: 9, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                       subtitle: Padding(
                         padding: const EdgeInsets.only(top: 8.0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('📍 Mueble: $ubicacion', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                            Text('📍 Mueble: $ubicacion', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
                             const SizedBox(height: 2),
-                            Text('📅 Caducidad: $fechaFormateada', style: const TextStyle(color: Colors.amberAccent, fontSize: 13)),
+                            Text('📅 Caducidad: $fechaFormateada', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
                             const SizedBox(height: 2),
-                            Text('📦 Existencia: ${d['cantidad']} piezas', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                            Text('📦 Existencia: ${d['cantidad']} piezas', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                           ],
                         ),
                       ),
-                      trailing: const Icon(Icons.add_shopping_cart, color: Colors.blueAccent),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.add_shopping_cart, color: Colors.blueAccent, size: 28),
+                        tooltip: 'Elegir cantidad manual',
+                        onPressed: () {
+                          Navigator.pop(context); 
+                          _pedirCantidad(snapshot.docs[i].id, d, ubicacion); 
+                        },
+                      ),
                       onTap: () {
                         Navigator.pop(context); 
                         _pedirCantidad(snapshot.docs[i].id, d, ubicacion); 
@@ -138,6 +167,24 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
         ),
       ),
     );
+  }
+
+  void _agregarTodoAlCarrito(String docId, Map<String, dynamic> data, String origen) {
+    int maximoPermitido = data['cantidad'] ?? 0;
+    if (maximoPermitido > 0) {
+      setState(() {
+        _carrito.add(ItemCarrito(
+          idOriginal: docId,
+          sku: data['sku'],
+          descripcion: data['descripcion'] ?? "ND",
+          cantidadEnCarrito: maximoPermitido,
+          fechaCaducidad: (data['fechaCaducidad'] as Timestamp).toDate(),
+          ubicacionOrigen: origen,
+          datosOriginales: data,
+        ));
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote completo ($maximoPermitido pzas) agregado al carrito'), backgroundColor: Colors.green));
+    }
   }
 
   void _pedirCantidad(String docId, Map<String, dynamic> data, String origen) {
@@ -248,7 +295,20 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12.0),
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+            child: SizedBox(
+              width: double.infinity,
+              height: 45,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.pinkAccent, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                icon: const Icon(Icons.inventory_2),
+                label: const Text('INGRESO DE MERCANCÍA (MANIFIESTO)', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaIngreso(usuario: widget.usuarioRegistra))),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
             child: Row(
               children: [
                 Expanded(

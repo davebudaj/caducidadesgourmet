@@ -7,6 +7,7 @@ import 'sabana.dart';
 import 'misiones.dart';
 import 'finanzas.dart';
 import 'historial.dart';
+import 'corporativo.dart';
 import 'admin.dart';
 
 class NavegacionPrincipal extends StatefulWidget {
@@ -45,15 +46,9 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
           if (dias <= 45 && dias > 0 && data['misionGenerada45d'] != true) {
             var refMision = FirebaseFirestore.instance.collection('misiones_auditoria').doc();
             batch.set(refMision, {
-              'sku': data['sku'],
-              'descripcion': data['descripcion'] ?? 'ND',
-              'ubicacion': data['ubicacion'] ?? 'ND',
-              'cantidad': data['cantidad'], 
-              'fechaCaducidad': data['fechaCaducidad'], 
-              'nombreProveedor': data['nombreProveedor'] ?? 'ND',
-              'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
-              'estado': 'pendiente',
-              'fechaGeneracion': FieldValue.serverTimestamp(),
+              'sku': data['sku'], 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
+              'cantidad': data['cantidad'], 'fechaCaducidad': data['fechaCaducidad'], 'nombreProveedor': data['nombreProveedor'] ?? 'ND',
+              'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO', 'estado': 'pendiente', 'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': 'Verificar lote próximo a vencer (45 días)'
             });
             batch.update(doc.reference, {'misionGenerada45d': true}); 
@@ -61,50 +56,35 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
           }
         }
       }
-
       if (misionesNuevas > 0) await batch.commit();
-
       if (caducados > 0 || criticos > 0 || misionesNuevas > 0) {
         if (!mounted) return;
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            backgroundColor: const Color(0xFF1E1E1E),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.redAccent, width: 2)),
-            title: Row(children: [const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 30), const SizedBox(width: 10), Expanded(child: Text('Hola, ${widget.nombreUsuario}', style: const TextStyle(color: Colors.white, fontSize: 18)))]),
-            content: Column(
-              mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Resumen de alertas en piso:', style: TextStyle(color: Colors.white70)), const SizedBox(height: 15),
-                if (caducados > 0) Text('• $caducados lotes CADUCADOS', style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 16)), const SizedBox(height: 5),
-                if (criticos > 0) Text('• $criticos lotes en CRÍTICO (< 15 días)', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16)), const SizedBox(height: 15),
-                if (misionesNuevas > 0) Text('Se generaron $misionesNuevas misiones automáticas nuevas para verificar.', style: const TextStyle(color: Colors.blueAccent, fontSize: 12)),
-              ],
-            ),
-            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('ENTENDIDO', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)))]
-          )
-        );
+        showDialog(context: context, builder: (context) => AlertDialog(backgroundColor: const Color(0xFF1E1E1E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.redAccent, width: 2)), title: Row(children: [const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 30), const SizedBox(width: 10), Expanded(child: Text('Hola, ${widget.nombreUsuario}', style: const TextStyle(color: Colors.white, fontSize: 18)))]), content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Resumen de alertas en piso:', style: TextStyle(color: Colors.white70)), const SizedBox(height: 15), if (caducados > 0) Text('• $caducados lotes CADUCADOS', style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 16)), const SizedBox(height: 5), if (criticos > 0) Text('• $criticos lotes en CRÍTICO (< 15 días)', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16)), const SizedBox(height: 15), if (misionesNuevas > 0) Text('Se generaron $misionesNuevas misiones automáticas.', style: const TextStyle(color: Colors.blueAccent, fontSize: 12)),]), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('ENTENDIDO', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)))]));
       }
-    } catch (e) { debugPrint("Error al revisar alertas: $e"); }
+    } catch (e) { debugPrint("Error: $e"); }
   }
 
   void _navegarASabanaConFiltro(String filtroRiesgo) {
-    setState(() { _indiceActual = 1; }); 
+    setState(() => _indiceActual = 1); 
     _dashboardKey.currentState?.aplicarFiltroEspecial(filtroRiesgo); 
   }
 
   @override
   Widget build(BuildContext context) {
     List<Widget> pantallas = [PantallaEscaner(estaActiva: _indiceActual == 0, usuarioRegistra: widget.nombreUsuario), PantallaDashboard(key: _dashboardKey, usuarioActual: widget.nombreUsuario), const PantallaMisiones()];
-    List<BottomNavigationBarItem> items = [const BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Escanear'), const BottomNavigationBarItem(icon: Icon(Icons.list_alt), label: 'Sábana'), const BottomNavigationBarItem(icon: Icon(Icons.assignment_late), label: 'Misiones')];
+    List<BottomNavigationBarItem> items = [const BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Escáner'), const BottomNavigationBarItem(icon: Icon(Icons.list_alt), label: 'Sábana'), const BottomNavigationBarItem(icon: Icon(Icons.assignment_late), label: 'Misiones')];
     if (widget.esJefe) {
       pantallas.add(const PantallaHistorial()); items.add(const BottomNavigationBarItem(icon: Icon(Icons.archive), label: 'Historial'));
       pantallas.add(PantallaGraficas(onFiltroSeleccionado: _navegarASabanaConFiltro)); items.add(const BottomNavigationBarItem(icon: Icon(Icons.pie_chart), label: 'Finanzas'));
+      pantallas.add(const PantallaCorporativo()); items.add(const BottomNavigationBarItem(icon: Icon(Icons.account_balance), label: 'Corp'));
       pantallas.add(const PantallaAdmin()); items.add(const BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Ajustes'));
     }
     return Scaffold(
       body: IndexedStack(index: _indiceActual, children: pantallas),
-      bottomNavigationBar: BottomNavigationBar(type: BottomNavigationBarType.fixed, currentIndex: _indiceActual, onTap: (index) => setState(() => _indiceActual = index), selectedItemColor: Colors.amber, unselectedItemColor: Colors.white54, backgroundColor: Colors.black, items: items),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed, selectedFontSize: 10, unselectedFontSize: 9, currentIndex: _indiceActual,
+        onTap: (index) => setState(() => _indiceActual = index), selectedItemColor: Colors.amber, unselectedItemColor: Colors.white54, backgroundColor: Colors.black, items: items
+      ),
     );
   }
 }
