@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PantallaHistorial extends StatefulWidget {
-  const PantallaHistorial({super.key});
+  final String idTiendaGlobal;
+  const PantallaHistorial({super.key, required this.idTiendaGlobal});
   @override
   State<PantallaHistorial> createState() => _PantallaHistorialState();
 }
@@ -16,7 +17,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     return Scaffold(
       appBar: AppBar(title: const Text('Historial de Tratamientos', style: TextStyle(fontWeight: FontWeight.bold))),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('historial_tratamientos').orderBy('fechaTratamiento', descending: true).snapshots(),
+        stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').orderBy('fechaTratamiento', descending: true).snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));

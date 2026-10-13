@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PantallaIngreso extends StatefulWidget {
+  final String idTiendaGlobal;
   final String usuario;
-  const PantallaIngreso({super.key, required this.usuario});
+  const PantallaIngreso({super.key, required this.usuario, required this.idTiendaGlobal});
   @override
   State<PantallaIngreso> createState() => _PantallaIngresoState();
 }
@@ -95,7 +96,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     var batch = FirebaseFirestore.instance.batch();
     
     for (var item in _manifiesto) {
-      var ref = FirebaseFirestore.instance.collection('inventario_activo').doc();
+      var ref = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc();
       Map<String, dynamic> data = {
         'sku': item['sku'],
         'descripcion': item['descripcion'],
@@ -119,9 +120,9 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     }
 
     // Si la bodega no existe, la creamos
-    var ubiSnap = await FirebaseFirestore.instance.collection('ubicaciones').where('nombre', isEqualTo: 'OPERACION TIENDA').get();
+    var ubiSnap = await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').where('nombre', isEqualTo: 'OPERACION TIENDA').get();
     if (ubiSnap.docs.isEmpty) {
-      batch.set(FirebaseFirestore.instance.collection('ubicaciones').doc(), {'nombre': 'OPERACION TIENDA'});
+      batch.set(FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').doc(), {'nombre': 'OPERACION TIENDA'});
     }
 
     await batch.commit();

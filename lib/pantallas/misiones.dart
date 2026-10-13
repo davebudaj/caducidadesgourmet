@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PantallaMisiones extends StatelessWidget {
-  const PantallaMisiones({super.key});
+  final String idTiendaGlobal;
+  const PantallaMisiones({super.key, required this.idTiendaGlobal});
 
   int _getPriority(Map<String, dynamic> m) {
     if (m['mensaje'] != null && m['mensaje'].toString().contains('90 DÍAS')) return 1;
@@ -23,7 +24,7 @@ class PantallaMisiones extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Misiones de Auditoría', style: TextStyle(fontWeight: FontWeight.bold))),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('misiones_auditoria').snapshots(),
+        stream: FirebaseFirestore.instance.collection('tiendas').doc(idTiendaGlobal).collection('misiones_auditoria').snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent)));
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));

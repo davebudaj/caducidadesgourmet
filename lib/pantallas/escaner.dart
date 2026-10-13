@@ -8,10 +8,11 @@ import '../modelos/etiqueta_mes.dart';
 import 'ingreso.dart';
 
 class PantallaEscaner extends StatefulWidget {
+  final String idTiendaGlobal;
   final bool estaActiva;
   final String usuarioRegistra;
 
-  const PantallaEscaner({super.key, this.estaActiva = true, required this.usuarioRegistra});
+  const PantallaEscaner({super.key, this.estaActiva = true, required this.usuarioRegistra, required this.idTiendaGlobal});
 
   @override
   State<PantallaEscaner> createState() => _PantallaEscanerState();
@@ -83,7 +84,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       if (_modoTrasvase) {
         _seleccionarOrigenYCantidad(codigoLimpio);
       } else {
-        await Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaRegistro(skuEscaneado: codigoLimpio, ubicacionPredefinida: _ubicacionDestino, usuarioRegistra: widget.usuarioRegistra)));
+        await Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaRegistro(skuEscaneado: codigoLimpio, ubicacionPredefinida: _ubicacionDestino, usuarioRegistra: widget.usuarioRegistra, idTiendaGlobal: widget.idTiendaGlobal)));
       }
       _skuController.clear();
     }
@@ -92,8 +93,8 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   }
 
   void _seleccionarOrigenYCantidad(String codigoBuscado) async {
-    var snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('sku', isEqualTo: codigoBuscado).get();
-    if (snapshot.docs.isEmpty) snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('ean', isEqualTo: codigoBuscado).get();
+    var snapshot = await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').where('sku', isEqualTo: codigoBuscado).get();
+    if (snapshot.docs.isEmpty) snapshot = await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').where('ean', isEqualTo: codigoBuscado).get();
     if (snapshot.docs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay existencias registradas en piso.'), backgroundColor: Colors.redAccent));
       return;
@@ -104,7 +105,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   // AQUÍ ESTÁ LA CORRECCIÓN: Ordenamos los datos localmente en lugar de pedírselo a Firebase
   void _abrirMultiSelectPorMueble(String nombreMueble) async {
     try {
-      var snapshot = await FirebaseFirestore.instance.collection('inventario_activo').where('ubicacion', isEqualTo: nombreMueble).get();
+      var snapshot = await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').where('ubicacion', isEqualTo: nombreMueble).get();
       if (snapshot.docs.isEmpty) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('El mueble "$nombreMueble" está vacío.'), backgroundColor: Colors.orangeAccent));
         return;
@@ -284,7 +285,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
     }
 
     for (var item in seleccionados) {
-      var docRef = FirebaseFirestore.instance.collection('inventario_activo').doc(item.idOriginal);
+      var docRef = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc(item.idOriginal);
       var docSnap = await docRef.get();
       if (docSnap.exists) {
         int cantActual = docSnap['cantidad'];
@@ -294,7 +295,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
           await docRef.update({'cantidad': cantActual - item.cantidadEnCarrito});
         }
         
-        var queryDestino = await FirebaseFirestore.instance.collection('inventario_activo')
+        var queryDestino = await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo')
             .where('sku', isEqualTo: item.sku)
             .where('ubicacion', isEqualTo: _ubicacionDestino)
             .where('fechaCaducidad', isEqualTo: Timestamp.fromDate(item.fechaCaducidad))
@@ -308,7 +309,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
           newData['cantidad'] = item.cantidadEnCarrito;
           newData['ubicacion'] = _ubicacionDestino;
           newData['fechaCaptura'] = FieldValue.serverTimestamp();
-          await FirebaseFirestore.instance.collection('inventario_activo').add(newData);
+          await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').add(newData);
         }
       }
     }
@@ -341,7 +342,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.pinkAccent, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 icon: const Icon(Icons.inventory_2),
                 label: const Text('INGRESO DE MERCANCÍA (MANIFIESTO)', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaIngreso(usuario: widget.usuarioRegistra))),
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaIngreso(usuario: widget.usuarioRegistra, idTiendaGlobal: widget.idTiendaGlobal))),
               ),
             ),
           ),
@@ -351,7 +352,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
               children: [
                 Expanded(
                   child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+                    stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) return const LinearProgressIndicator(color: Colors.amber);
                       List<String> listaMuebles = snapshot.data!.docs.map((d) => d['nombre'] as String).toList();
@@ -525,10 +526,11 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
 }
 
 class PantallaRegistro extends StatefulWidget {
+  final String idTiendaGlobal;
   final String skuEscaneado;
   final String? ubicacionPredefinida;
   final String usuarioRegistra;
-  const PantallaRegistro({super.key, required this.skuEscaneado, this.ubicacionPredefinida, required this.usuarioRegistra});
+  const PantallaRegistro({super.key, required this.skuEscaneado, this.ubicacionPredefinida, required this.usuarioRegistra, required this.idTiendaGlobal});
   @override
   State<PantallaRegistro> createState() => _PantallaRegistroState();
 }
@@ -578,7 +580,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
         'capturista': widget.usuarioRegistra,
       };
       if (_datosMaestros != null) map.addAll(_datosMaestros!);
-      await FirebaseFirestore.instance.collection('inventario_activo').add(map);
+      await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').add(map);
       if (mounted) { Navigator.pop(context); }
     } catch (e) { setState(() => _guardando = false); }
   }
@@ -643,7 +645,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             TextField(controller: _cantidadController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Cantidad de Piezas', filled: true)),
             const SizedBox(height: 20),
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+              stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const LinearProgressIndicator();
                 List<String> listaMuebles = snapshot.data!.docs.map((d) => d['nombre'] as String).toList();

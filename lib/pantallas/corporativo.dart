@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PantallaCorporativo extends StatefulWidget {
-  const PantallaCorporativo({super.key});
+  final String idTiendaGlobal;
+  const PantallaCorporativo({super.key, required this.idTiendaGlobal});
   @override
   State<PantallaCorporativo> createState() => _PantallaCorporativoState();
 }
@@ -75,7 +76,7 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
                           int total = _seleccionados.length;
                           var batch = FirebaseFirestore.instance.batch();
                           for (String id in _seleccionados) {
-                            batch.update(FirebaseFirestore.instance.collection('inventario_activo').doc(id), {
+                            batch.update(FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc(id), {
                               'comentarioCorporativo': comentario
                             });
                           }
@@ -111,7 +112,7 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
             )
           : null,
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('inventario_activo').snapshots(),
+        stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.pinkAccent));
           if (!snapshot.hasData) return const Center(child: Text('Sin datos.'));

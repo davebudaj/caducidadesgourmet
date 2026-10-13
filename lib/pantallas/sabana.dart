@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:convert';
 import 'package:universal_html/html.dart' as html;
-import 'package:mobile_scanner/mobile_scanner.dart'; // Agregado para el escáner
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../modelos/etiqueta_mes.dart';
 
 class PantallaDashboard extends StatefulWidget {
+  final String idTiendaGlobal;
   final String usuarioActual;
-  const PantallaDashboard({super.key, required this.usuarioActual});
+  const PantallaDashboard({super.key, required this.usuarioActual, required this.idTiendaGlobal});
   @override
   State<PantallaDashboard> createState() => PantallaDashboardState();
 }
@@ -20,12 +21,22 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String? _filtroGrupo;
   String? _filtroRiesgoEspecial; 
   
+  bool _modoSeleccion = false;
+  Set<String> _seleccionados = {};
+  
   late Stream<QuerySnapshot> _inventarioStream; 
 
+  // --- OBTENER ID DE TIENDA DESDE EL NAVEGADOR O USUARIO ACTUAL ---
+  // Nota: Lo ideal es pasar el idTiendaGlobal desde navegacion.dart, 
+  // pero para no alterar la estructura actual, leemos la colección raíz.
+  // Asumiremos que el contexto de la tienda se mantiene global o se adapta.
+  // Por ahora leeremos de 'inventario_activo' globalmente si no se pasa el ID.
+  
   @override
   void initState() {
     super.initState();
-    _inventarioStream = FirebaseFirestore.instance.collection('inventario_activo').orderBy('fechaCaducidad').snapshots();
+    // En el futuro, esto apuntará a _refTienda.collection('inventario_activo')
+    _inventarioStream = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').orderBy('fechaCaducidad').snapshots();
   }
 
   void aplicarFiltroEspecial(String riesgo) {
@@ -34,6 +45,113 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       _filtroProveedor = null; 
       _filtroGrupo = null;
     });
+  }
+
+  void _borrarSeleccionados() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('Borrar Múltiples Lotes', style: TextStyle(color: Colors.redAccent)),
+        content: Text('¿Seguro que deseas eliminar ${_seleccionados.length} lote(s) de la Sábana de Riesgos?\n\nEsta acción no se puede deshacer.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              var batch = FirebaseFirestore.instance.batch();
+              for (String id in _seleccionados) {
+                batch.delete(FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc(id));
+              }
+              await batch.commit();
+              setState(() {
+                _modoSeleccion = false;
+                _seleccionados.clear();
+              });
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lotes eliminados exitosamente'), backgroundColor: Colors.green));
+            },
+            child: const Text('SÍ, BORRAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
+          )
+        ]
+      )
+    );
+  }
+
+  void _tratamientoMasivo() {
+    String motivoSeleccionado = 'Merma / Destrucción';
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            title: const Text('Tratamiento Masivo', style: TextStyle(color: Colors.amber)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Se aplicará a ${_seleccionados.length} lote(s) en su totalidad.', style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 15),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Motivo de Salida', filled: true, fillColor: Colors.white10),
+                  dropdownColor: const Color(0xFF2C2C2C),
+                  value: motivoSeleccionado,
+                  items: const [
+                    DropdownMenuItem(value: 'Merma / Destrucción', child: Text('📉 Merma / Destrucción')),
+                    DropdownMenuItem(value: 'Saldado / Promoción', child: Text('🏷️ Saldado / Promoción')),
+                    DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
+                  ],
+                  onChanged: (val) => setDialogState(() => motivoSeleccionado = val!),
+                )
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  var batch = FirebaseFirestore.instance.batch();
+                  
+                  for (String id in _seleccionados) {
+                    var docRef = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc(id);
+                    var docSnap = await docRef.get();
+                    if (docSnap.exists) {
+                      var d = docSnap.data() as Map<String, dynamic>;
+                      int cant = d['cantidad'] ?? 0;
+                      double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
+                      
+                      var histRef = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').doc();
+                      batch.set(histRef, {
+                        'sku': d['sku'],
+                        'descripcion': d['descripcion'],
+                        'nombreProveedor': d['nombreProveedor'] ?? 'ND',
+                        'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                        'ubicacion': d['ubicacion'],
+                        'cantidadTratada': cant,
+                        'motivo': motivoSeleccionado,
+                        'costoTotal': cant * precio,
+                        'fechaTratamiento': FieldValue.serverTimestamp(),
+                        'usuario': widget.usuarioActual
+                      });
+                      
+                      batch.delete(docRef);
+                    }
+                  }
+                  await batch.commit();
+                  setState(() {
+                    _modoSeleccion = false;
+                    _seleccionados.clear();
+                  });
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tratamiento masivo aplicado exitosamente'), backgroundColor: Colors.green));
+                },
+                child: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold))
+              )
+            ]
+          );
+        }
+      )
+    );
   }
 
   void _verDetalleCompleto(QueryDocumentSnapshot docSnap) {
@@ -53,8 +171,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               _infoRow("PROVEEDOR", d['nombreProveedor']),
               _infoRow("GRUPO", d['nombreGpoArticulos']),
               _infoRow("UBICACIÓN PISO", d['ubicacion']),
-              _infoRow("CANTIDAD", d['cantidad'].toString() + " pzas"),
-              _infoRow("PRECIO VENTA", "MXN " + d['precioVenta'].toString()),
+              _infoRow("CANTIDAD FÍSICA", d['cantidad'].toString() + " pzas"),
+              _infoRow("PRECIO VENTA", "MXN " + (d['precioVenta'] ?? 0).toString()),
+              _infoRow("OH TEÓRICO (SAP)", (d['oh'] ?? 'No disponible').toString() + " pzas"),
               _infoRow("CADUCIDAD", "${cad.day}/${cad.month}/${cad.year}"),
               const SizedBox(height: 15),
               SizedBox(
@@ -128,14 +247,12 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                    onPressed: () async {
                      int cantATratar = int.tryParse(cantCtrl.text) ?? 0;
                      if (cantATratar > 0 && cantATratar <= cantOriginal) {
-                       double precio = double.tryParse(d['precioVenta'].toString()) ?? 0.0;
+                       double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
                        
-                       await FirebaseFirestore.instance.collection('historial_tratamientos').add({
+                       await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').add({
                          'sku': d['sku'],
                          'descripcion': d['descripcion'],
                          'nombreProveedor': d['nombreProveedor'] ?? 'ND',
-                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
-                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
                          'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
                          'ubicacion': d['ubicacion'],
                          'cantidadTratada': cantATratar,
@@ -242,7 +359,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             const SizedBox(height: 15),
                             
                             StreamBuilder<QuerySnapshot>(
-                               stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+                               stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
                                builder: (context, ubiSnapshot) {
                                   if (!ubiSnapshot.hasData) return const LinearProgressIndicator();
                                   List<String> validUbis = ubiSnapshot.data!.docs.map((u) => u['nombre'].toString()).toList();
@@ -386,7 +503,17 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sábana de Riesgo', style: TextStyle(fontWeight: FontWeight.bold))),
+      appBar: _modoSeleccion
+          ? AppBar(
+              backgroundColor: Colors.redAccent.shade700,
+              leading: IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _modoSeleccion = false; _seleccionados.clear(); })),
+              title: Text('${_seleccionados.length} seleccionados', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              actions: [
+                IconButton(icon: const Icon(Icons.handyman), tooltip: 'Tratamiento Masivo', onPressed: _tratamientoMasivo),
+                IconButton(icon: const Icon(Icons.delete_forever), tooltip: 'Borrar Lotes', onPressed: _borrarSeleccionados),
+              ],
+            )
+          : AppBar(title: const Text('Sábana de Riesgo', style: TextStyle(fontWeight: FontWeight.bold))),
       body: StreamBuilder<QuerySnapshot>(
         stream: _inventarioStream,
         builder: (context, snapshot) {
@@ -470,8 +597,6 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       decoration: InputDecoration(
                         hintText: 'Buscar SKU o Artículo...',
                         prefixIcon: const Icon(Icons.search, color: Colors.amber),
-                        
-                        // EL BOTÓN DEL ESCÁNER HA SIDO AÑADIDO AQUÍ COMO SUFFIX ICON
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
                           tooltip: 'Escanear Código',
@@ -486,7 +611,6 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                              }
                           }
                         ),
-                        
                         filled: true, fillColor: Colors.white10,
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
                         contentPadding: const EdgeInsets.symmetric(vertical: 0)
@@ -544,17 +668,40 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         itemCount: docsFinales.length,
                         itemBuilder: (context, i) {
                           var d = docsFinales[i].data() as Map<String, dynamic>;
+                          String docId = docsFinales[i].id;
                           DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
                           int dias = cad.difference(DateTime.now()).inDays;
                           Map<String, dynamic> etiqueta = EtiquetaMes.obtener(cad);
+                          bool isSelected = _seleccionados.contains(docId);
                           
                           return Card(
-                            color: Colors.white10,
+                            color: isSelected ? Colors.redAccent.withOpacity(0.2) : Colors.white10,
                             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Colors.white24)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: isSelected ? Colors.redAccent : Colors.white24, width: isSelected ? 2 : 1)),
                             child: ListTile(
                               contentPadding: const EdgeInsets.all(12),
-                              onTap: () => _verDetalleCompleto(docsFinales[i]), 
+                              onLongPress: () {
+                                if (!_modoSeleccion) {
+                                  setState(() {
+                                    _modoSeleccion = true;
+                                    _seleccionados.add(docId);
+                                  });
+                                }
+                              },
+                              onTap: () {
+                                if (_modoSeleccion) {
+                                  setState(() {
+                                    if (isSelected) {
+                                      _seleccionados.remove(docId);
+                                      if (_seleccionados.isEmpty) _modoSeleccion = false;
+                                    } else {
+                                      _seleccionados.add(docId);
+                                    }
+                                  });
+                                } else {
+                                  _verDetalleCompleto(docsFinales[i]);
+                                }
+                              }, 
                               leading: Container(
                                 width: 45, height: 45,
                                 decoration: BoxDecoration(color: etiqueta['color'].withOpacity(0.2), shape: BoxShape.circle, border: Border.all(color: etiqueta['color'])),
@@ -575,7 +722,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   ],
                                 ),
                               ),
-                              trailing: const Icon(Icons.info_outline, color: Colors.white54),
+                              trailing: _modoSeleccion
+                                  ? Icon(isSelected ? Icons.check_circle : Icons.radio_button_unchecked, color: isSelected ? Colors.redAccent : Colors.white54)
+                                  : const Icon(Icons.info_outline, color: Colors.white54),
                             ),
                           );
                         },
@@ -589,24 +738,21 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   }
 }
 
-// Nueva pantalla anidada para manejar el escaneo rápido sin salir de la Sábana
 class PantallaEscanerRapido extends StatefulWidget {
   const PantallaEscanerRapido({super.key});
-
   @override
   State<PantallaEscanerRapido> createState() => _PantallaEscanerRapidoState();
 }
 
 class _PantallaEscanerRapidoState extends State<PantallaEscanerRapido> {
   bool _yaEscaneado = false;
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Escanear SKU para buscar', style: TextStyle(color: Colors.amber))),
       body: MobileScanner(
         onDetect: (capture) {
-          if (_yaEscaneado) return; // Evita que lea 10 veces en un segundo
+          if (_yaEscaneado) return; 
           final barcode = capture.barcodes.first;
           if (barcode.rawValue != null) {
             setState(() => _yaEscaneado = true);

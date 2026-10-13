@@ -3,8 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 class PantallaGraficas extends StatefulWidget {
+  final String idTiendaGlobal;
   final Function(String) onFiltroSeleccionado;
-  const PantallaGraficas({super.key, required this.onFiltroSeleccionado});
+  const PantallaGraficas({super.key, required this.onFiltroSeleccionado, required this.idTiendaGlobal});
 
   @override
   State<PantallaGraficas> createState() => _PantallaGraficasState();
@@ -18,7 +19,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     return Scaffold(
       appBar: AppBar(title: const Text('Salud e Impacto Financiero', style: TextStyle(fontWeight: FontWeight.bold))),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('inventario_activo').snapshots(),
+        stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));

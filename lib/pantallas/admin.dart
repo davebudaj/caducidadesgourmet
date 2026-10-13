@@ -8,7 +8,15 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 
 class PantallaAdmin extends StatefulWidget {
-  const PantallaAdmin({super.key});
+  final String idTiendaGlobal;
+  final String nombreTienda;
+
+  const PantallaAdmin({
+    super.key,
+    required this.idTiendaGlobal,
+    required this.nombreTienda
+  });
+
   @override
   State<PantallaAdmin> createState() => _PantallaAdminState();
 }
@@ -24,6 +32,14 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   bool _procesando = false;
   String _estado = "Listo para cargar archivos CSV";
   final GlobalKey _qrKey = GlobalKey(); 
+
+  late DocumentReference _refTienda;
+
+  @override
+  void initState() {
+    super.initState();
+    _refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
+  }
 
   void _mostrarYDescargarQR(String nombreMueble) {
     showDialog(
@@ -56,61 +72,121 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) { debugPrint("Error descargando QR: $e"); }
   }
 
-  Future<void> _cargarCSV() async {
+  // --- BOTÓN 1: CARGA DEL CATÁLOGO MAESTRO (Archivo Reto Zona 9) ---
+  Future<void> _cargarCatalogoMaestroZona9() async {
     try {
       FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
       if (resultado != null && resultado.files.single.bytes != null) {
-        setState(() { _procesando = true; _estado = "Leyendo Catálogo Maestro..."; });
+        setState(() { _procesando = true; _estado = "Leyendo Catálogo Maestro Zonal (Reto Zona 9)..."; });
         final bytes = resultado.files.single.bytes!;
+        
+        // El archivo de Excel suele venir en latin1
         final csvString = latin1.decode(bytes); 
         List<String> filas = const LineSplitter().convert(csvString);
         RegExp separador = RegExp(r',(?=(?:[^"]*"[^"]*")*[^"]*$)');
+        
+        if (filas.length < 8) {
+          setState(() { _procesando = false; _estado = "Error: El archivo no parece ser 'Reto Zona 9'. Faltan filas."; });
+          return;
+        }
+
+        // Fila 5 (índice 5 en código) tiene los códigos de centro (0012, 0075...)
+        List<String> codigosCentro = filas[5].split(separador).map((e) => e.replaceAll('"', '').trim()).toList();
+        
+        String idTiendaLocal = widget.idTiendaGlobal.split('_').last; // Ej. '0075'
+        int columnaTienda = -1;
+        
+        // Buscar en qué columna (a partir de la J) está el código de nuestra tienda
+        for (int j = 10; j < codigosCentro.length; j++) {
+           if (codigosCentro[j] == idTiendaLocal) {
+              columnaTienda = j;
+              break;
+           }
+        }
+
+        if (columnaTienda == -1) {
+           setState(() { _procesando = false; _estado = "Error: No se encontró la tienda $idTiendaLocal en el archivo de la Zona."; });
+           return;
+        }
+
         var db = FirebaseFirestore.instance;
         WriteBatch lote = db.batch(); 
         int contadorSubidas = 0; int operacionesEnLote = 0;
 
-        for (var i = 1; i < filas.length; i++) {
+        // Leer datos desde la fila 7 (índice 7 en código)
+        for (var i = 7; i < filas.length; i++) {
           if (filas[i].trim().isEmpty) continue;
           List<String> columnas = filas[i].split(separador);
-          if (columnas.length >= 13) { 
-            String ean = columnas[8].replaceAll('"', '').split('.')[0].trim(); 
-            String sku = columnas[9].replaceAll('"', '').split('.')[0].trim(); 
+          
+          if (columnas.length > columnaTienda) { 
+            // Basado en "Reto Zona 9"
+            String provId = columnas[1].replaceAll('"', '').trim();
+            String provNombre = columnas[2].replaceAll('"', '').trim();
+            String gpoId = columnas[3].replaceAll('"', '').trim();
+            String gpoNombre = columnas[4].replaceAll('"', '').trim();
+            String ean = columnas[6].replaceAll('"', '').trim();
+            String sku = columnas[7].replaceAll('"', '').trim();
+            String desc = columnas[8].replaceAll('"', '').trim();
+            String precio = columnas[9].replaceAll('"', '').trim();
+            
+            // EL OH (On-Hand) es lo que viene en la columna específica de nuestra tienda
+            String oh = columnas[columnaTienda].replaceAll('"', '').trim();
+
             Map<String, dynamic> dataProducto = {
-              'zonaVentas': columnas[0].replaceAll('"', '').trim(), 'centro': columnas[1].replaceAll('"', '').trim(),
-              'almacen': columnas[2].replaceAll('"', '').trim(), 'idProveedor': columnas[3].replaceAll('"', '').trim(),
-              'nombreProveedor': columnas[4].replaceAll('"', '').trim(), 'idCategoria': columnas[5].replaceAll('"', '').trim(),
-              'nombreGpoArticulos': columnas[6].replaceAll('"', '').trim(), 'estado': columnas[7].replaceAll('"', '').trim(),
-              'sku': sku, 'ean': ean, 'descripcion': columnas[10].replaceAll('"', '').trim(),
-              'precioVenta': columnas[11].replaceAll('"', '').trim(), 'oh': columnas[12].replaceAll('"', '').trim()
+              'idProveedor': provId,
+              'nombreProveedor': provNombre,
+              'idCategoria': gpoId,
+              'nombreGpoArticulos': gpoNombre,
+              'sku': sku, 
+              'ean': ean, 
+              'descripcion': desc,
+              'precioVenta': precio, 
+              'oh': oh // ¡OH específico de la tienda!
             };
-            if (ean.isNotEmpty && ean != "0") { lote.set(db.collection('maestro_productos').doc(ean), dataProducto); operacionesEnLote++; contadorSubidas++; }
-            if (sku.isNotEmpty) { lote.set(db.collection('maestro_productos').doc(sku), dataProducto); operacionesEnLote++; contadorSubidas++; }
+            
+            // Guardamos el catálogo A NIVEL GLOBAL para que el escáner de todas las tiendas lo encuentre
+            if (ean.isNotEmpty && ean != "0" && ean != "NaN") { 
+               lote.set(db.collection('maestro_productos').doc(ean), dataProducto); 
+               operacionesEnLote++; contadorSubidas++; 
+            }
+            if (sku.isNotEmpty && sku != "NaN") { 
+               lote.set(db.collection('maestro_productos').doc(sku), dataProducto); 
+               operacionesEnLote++; contadorSubidas++; 
+            }
+            
             if (operacionesEnLote >= 450) { await lote.commit(); lote = db.batch(); operacionesEnLote = 0; }
           }
         }
+        
         if (operacionesEnLote > 0) { await lote.commit(); }
-        setState(() { _procesando = false; _estado = "¡Éxito!\nSe mapearon $contadorSubidas registros al Catálogo."; });
+        setState(() { _procesando = false; _estado = "¡Catálogo Actualizado!\nSe mapearon $contadorSubidas SKUs con el OH de ${widget.nombreTienda}."; });
       }
-    } catch (e) { setState(() { _procesando = false; _estado = "Error:\n$e"; }); }
+    } catch (e) { setState(() { _procesando = false; _estado = "Error en Catálogo:\n$e"; }); }
   }
 
-  Future<void> _cargarVentasCSV() async {
+  // --- BOTÓN 2: CARGA DE VENTAS DEL DÍA (Archivo ZRTL_CMP_W056) ---
+  Future<void> _cargarVentasDiariasCSV() async {
     try {
       FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
       if (resultado != null && resultado.files.single.bytes != null) {
-        setState(() { _procesando = true; _estado = "Calculando FIFO y deduciendo ventas..."; });
+        setState(() { _procesando = true; _estado = "Calculando FIFO y deduciendo ventas en piso..."; });
         final bytes = resultado.files.single.bytes!;
-        final csvString = latin1.decode(bytes); 
+        
+        final csvString = utf8.decode(bytes, allowMalformed: true); 
         List<String> filas = const LineSplitter().convert(csvString);
         RegExp separador = RegExp(r',(?=(?:[^"]*"[^"]*")*[^"]*$)');
+        
         Map<String, int> ventasProcesadas = {};
 
+        // Inicia en la fila 3 (Que equivale a la línea 4 en Excel porque empieza en 0)
         for (var i = 3; i < filas.length; i++) {
           if (filas[i].trim().isEmpty) continue;
           List<String> columnas = filas[i].split(separador);
           if (columnas.length >= 2) {
             String sku = columnas[0].replaceAll('"', '').trim();
             int cantVendida = int.tryParse(columnas[1].replaceAll('"', '').trim()) ?? 0;
+            
+            // Ignora negativos (devoluciones)
             if (sku.isNotEmpty && cantVendida > 0) {
               ventasProcesadas[sku] = (ventasProcesadas[sku] ?? 0) + cantVendida;
             }
@@ -123,7 +199,9 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         for (var sku in ventasProcesadas.keys) {
           int porDescontar = ventasProcesadas[sku]!;
           
-          var querySnap = await FirebaseFirestore.instance.collection('inventario_activo').where('sku', isEqualTo: sku).get();
+          // Búsqueda del inventario EXCLUSIVO de esta tienda
+          var querySnap = await _refTienda.collection('inventario_activo').where('sku', isEqualTo: sku).get();
+          
           var docsOrdenados = querySnap.docs.toList();
           docsOrdenados.sort((a, b) {
             var dataA = a.data() as Map<String, dynamic>;
@@ -132,13 +210,11 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             String ubiA = (dataA['ubicacion'] ?? '').toString().toUpperCase();
             String ubiB = (dataB['ubicacion'] ?? '').toString().toUpperCase();
             
-            // Prioridad 0: PISO o DISPLAY. Prioridad 1: BODEGA
+            // Prioridad PISO/DISPLAY (0) antes que BODEGA (1)
             int prioA = ubiA.contains('BODEGA') ? 1 : 0;
             int prioB = ubiB.contains('BODEGA') ? 1 : 0;
+            if (prioA != prioB) return prioA.compareTo(prioB); 
             
-            if (prioA != prioB) return prioA.compareTo(prioB); // Descuenta de PISO primero
-            
-            // Si están en el mismo tipo de mueble, descuenta el más viejo
             Timestamp tA = dataA['fechaCaducidad'] ?? Timestamp.now();
             Timestamp tB = dataB['fechaCaducidad'] ?? Timestamp.now();
             return tA.compareTo(tB);
@@ -155,8 +231,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             else await doc.reference.update({'cantidad': cantActual - descAqui});
 
             if (descAqui > 0) {
-              // LÓGICA ANTI-DUPLICADOS
-              var misionesP = await FirebaseFirestore.instance.collection('misiones_auditoria')
+              var misionesP = await _refTienda.collection('misiones_auditoria')
                   .where('estado', isEqualTo: 'pendiente')
                   .where('sku', isEqualTo: sku)
                   .get();
@@ -171,11 +246,11 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                   int descAnterior = docMision['descontado'] ?? 0;
                   await docMision.reference.update({
                       'descontado': descAnterior + descAqui,
-                      'fechaGeneracion': FieldValue.serverTimestamp() // Sube a lo más reciente
+                      'fechaGeneracion': FieldValue.serverTimestamp()
                   });
                   misionesActualizadas++;
               } else {
-                  await FirebaseFirestore.instance.collection('misiones_auditoria').add({
+                  await _refTienda.collection('misiones_auditoria').add({
                     'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
                     'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
                     'nombreProveedor': data['nombreProveedor'] ?? 'ND', 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
@@ -186,7 +261,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             }
           }
         }
-        setState(() { _procesando = false; _estado = "¡Cierre Exitoso!\nMisiones Nuevas: $misionesNuevas | Actualizadas: $misionesActualizadas"; });
+        setState(() { _procesando = false; _estado = "¡Cierre de Ventas Exitoso!\nMisiones Nuevas: $misionesNuevas | Actualizadas: $misionesActualizadas"; });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
   }
@@ -203,7 +278,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
               icon: const Icon(Icons.cloud_download, size: 16), 
               label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
-              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6JPS3QRZFIZMX', '_blank'); } 
+              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank'); } 
             )
           ),
           Padding(
@@ -226,15 +301,15 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
               const SizedBox(height: 20),
               if (_procesando) const CircularProgressIndicator(color: Colors.amber) else Column(children: [
-                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('CATÁLOGO MAESTRO (CSV)'), onPressed: _cargarCSV)),
+                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('1. SUBIR CATÁLOGO ZONAL (Reto Zona 9)'), onPressed: _cargarCatalogoMaestroZona9)),
                 const SizedBox(height: 15),
-                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('VENTAS DEL DÍA (CSV)'), onPressed: _cargarVentasCSV)),
+                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA (ZRTL_CMP_W056)'), onPressed: _cargarVentasDiariasCSV)),
               ]),
               const SizedBox(height: 40),
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
               
-              const Text('Gestión de Ubicaciones (Muebles)', style: TextStyle(fontSize: 18, color: Colors.amber)),
+              const Text('Gestión de Ubicaciones (Muebles de esta tienda)', style: TextStyle(fontSize: 18, color: Colors.amber)),
               const SizedBox(height: 15),
               Row(children: [
                 Container(
@@ -257,7 +332,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                   onPressed: () async { 
                     if (_muebleController.text.isNotEmpty) { 
                       String nombreFinal = '$_prefijoMueble ${_muebleController.text.trim().toUpperCase()}';
-                      await FirebaseFirestore.instance.collection('ubicaciones').add({'nombre': nombreFinal}); 
+                      await _refTienda.collection('ubicaciones').add({'nombre': nombreFinal}); 
                       _muebleController.clear(); 
                     } 
                   }, 
@@ -268,7 +343,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Container(
                 height: 200, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance.collection('ubicaciones').orderBy('nombre').snapshots(),
+                  stream: _refTienda.collection('ubicaciones').orderBy('nombre').snapshots(),
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
                     return ListView.builder(
@@ -295,7 +370,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
 
-              const Text('Gestión de Usuarios', style: TextStyle(fontSize: 18, color: Colors.amber)),
+              Text('Gestión de Usuarios (${widget.nombreTienda})', style: const TextStyle(fontSize: 18, color: Colors.amber)),
               const SizedBox(height: 15),
               Row(
                 children: [
@@ -324,13 +399,13 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                     onPressed: () async {
                       if (_numEmpleadoController.text.isNotEmpty && _nombreUsuarioController.text.isNotEmpty) {
-                        await FirebaseFirestore.instance.collection('colaboradores').doc(_numEmpleadoController.text.trim()).set({
+                        await _refTienda.collection('colaboradores').doc(_numEmpleadoController.text.trim()).set({
                           'nombre': _nombreUsuarioController.text.trim(),
                           'rol': _rolSeleccionado,
                         });
                         _numEmpleadoController.clear();
                         _nombreUsuarioController.clear();
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Usuario guardado exitosamente', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Usuario guardado en ${widget.nombreTienda}', style: const TextStyle(color: Colors.white)), backgroundColor: Colors.green));
                       } else {
                         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Llene todos los campos'), backgroundColor: Colors.redAccent));
                       }
@@ -343,10 +418,10 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Container(
                  height: 250, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
                  child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance.collection('colaboradores').snapshots(),
+                    stream: _refTienda.collection('colaboradores').snapshots(),
                     builder: (context, snapshot) {
                        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                       if (snapshot.data!.docs.isEmpty) return const Center(child: Text("Sin usuarios registrados", style: TextStyle(color: Colors.white54)));
+                       if (snapshot.data!.docs.isEmpty) return const Center(child: Text("Sin usuarios registrados en esta tienda", style: TextStyle(color: Colors.white54)));
                        return ListView.builder(
                           itemCount: snapshot.data!.docs.length,
                           itemBuilder: (context, index) {
