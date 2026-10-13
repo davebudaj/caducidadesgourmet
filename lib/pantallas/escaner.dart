@@ -6,6 +6,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../modelos/item_carrito.dart';
 import '../modelos/etiqueta_mes.dart';
 import 'ingreso.dart';
+import 'login.dart';
 
 class PantallaEscaner extends StatefulWidget {
   final String idTiendaGlobal;
@@ -323,7 +324,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.logout, color: Colors.redAccent),
-          onPressed: () async { await FirebaseAuth.instance.signOut(); },
+          onPressed: () { Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const PantallaLogin())); },
         ),
         title: const Text('Operaciones de Piso', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 16)),
         actions: [

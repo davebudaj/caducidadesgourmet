@@ -301,9 +301,9 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
               const SizedBox(height: 20),
               if (_procesando) const CircularProgressIndicator(color: Colors.amber) else Column(children: [
-                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('1. SUBIR CATÁLOGO ZONAL (Reto Zona 9)'), onPressed: _cargarCatalogoMaestroZona9)),
+                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('1. SUBIR CATÁLOGO ZONAL'), onPressed: _cargarCatalogoMaestroZona9)),
                 const SizedBox(height: 15),
-                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA (ZRTL_CMP_W056)'), onPressed: _cargarVentasDiariasCSV)),
+                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA'), onPressed: _cargarVentasDiariasCSV)),
               ]),
               const SizedBox(height: 40),
               const Divider(color: Colors.white24),
@@ -388,8 +388,10 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                       decoration: InputDecoration(filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)),
                       dropdownColor: const Color(0xFF2C2C2C),
                       items: const [
-                        DropdownMenuItem(value: 'piso', child: Text('Colaborador (Piso)')),
+                        DropdownMenuItem(value: 'director', child: Text('Director')),
+                        DropdownMenuItem(value: 'gerente', child: Text('Gerente')),
                         DropdownMenuItem(value: 'jefe', child: Text('Jefe / Administrador')),
+                        DropdownMenuItem(value: 'piso', child: Text('Colaborador (Piso)')),
                       ],
                       onChanged: (val) => setState(() => _rolSeleccionado = val!),
                     )
@@ -427,9 +429,15 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                           itemBuilder: (context, index) {
                              var doc = snapshot.data!.docs[index];
                              var data = doc.data() as Map<String, dynamic>;
-                             bool esJefe = data['rol'] == 'jefe';
+                             String rol = data['rol'] ?? 'piso';
+                             IconData icono = Icons.person;
+                             Color colorIcono = Colors.blueAccent;
+                             if (rol == 'director') { icono = Icons.account_balance; colorIcono = Colors.purpleAccent; }
+                             else if (rol == 'gerente') { icono = Icons.business_center; colorIcono = Colors.pinkAccent; }
+                             else if (rol == 'jefe') { icono = Icons.security; colorIcono = Colors.amber; }
+                             
                              return ListTile(
-                                leading: Icon(esJefe ? Icons.security : Icons.person, color: esJefe ? Colors.amber : Colors.blueAccent),
+                                leading: Icon(icono, color: colorIcono),
                                 title: Text(data['nombre'] ?? 'Sin nombre', style: const TextStyle(fontWeight: FontWeight.bold)),
                                 subtitle: Text('Emp: ${doc.id} • Rol: ${data['rol']}'.toUpperCase(), style: const TextStyle(color: Colors.white54, fontSize: 12)),
                                 trailing: IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => doc.reference.delete()),

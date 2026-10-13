@@ -68,7 +68,8 @@ class _PantallaLoginState extends State<PantallaLogin> {
       }
 
       if (doc.exists) {
-        bool esJefe = doc.data()?['rol'] == 'jefe';
+        String rol = doc.data()?['rol'] ?? '';
+        bool esJefe = ['jefe', 'gerente', 'director'].contains(rol);
         String nombre = doc.data()?['nombre'] ?? 'Colaborador';
         if (mounted) {
           Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => NavegacionPrincipal(
