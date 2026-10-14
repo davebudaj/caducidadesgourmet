@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PantallaIngreso extends StatefulWidget {
-  final String idTiendaGlobal;
   final String usuario;
+  final String idTiendaGlobal;
   const PantallaIngreso({super.key, required this.usuario, required this.idTiendaGlobal});
   @override
   State<PantallaIngreso> createState() => _PantallaIngresoState();
@@ -18,16 +18,15 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
   List<Map<String, dynamic>> _manifiesto = [];
   bool _guardando = false;
 
-  // Algoritmo inteligente para leer formatos como 01.09.2026, 01/09/26, 010926
   DateTime? _parsearFecha(String input) {
     String clean = input.replaceAll(RegExp(r'[^0-9]'), ''); 
     try {
-      if (clean.length == 6) { // ddmmyy
+      if (clean.length == 6) {
         int d = int.parse(clean.substring(0, 2));
         int m = int.parse(clean.substring(2, 4));
         int y = int.parse(clean.substring(4, 6)) + 2000;
         return DateTime(y, m, d);
-      } else if (clean.length == 8) { // ddmmyyyy
+      } else if (clean.length == 8) {
         int d = int.parse(clean.substring(0, 2));
         int m = int.parse(clean.substring(2, 4));
         int y = int.parse(clean.substring(4, 8));
@@ -37,8 +36,9 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     return null;
   }
 
-  void _agregarItem(String sku) async {
-    if (sku.isEmpty) return;
+  void _agregarItem(String codigoIngresado) async {
+    String codigo = codigoIngresado.trim();
+    if (codigo.isEmpty) return;
     DateTime? cad = _parsearFecha(_fechaCtrl.text);
     
     if (cad == null) {
@@ -50,33 +50,65 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     
     int cant = int.tryParse(_cantCtrl.text) ?? 1;
 
-    // Buscar datos maestros rápidamente
+    String skuOficial = codigo;
+    String eanOficial = '';
     String desc = 'Buscando...';
     String prov = 'ND';
     String gpo = 'SIN GRUPO';
     Map<String, dynamic>? masterData;
 
-    var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(sku).get();
+    // 1. Buscar en el Catálogo Maestro por ID de documento (funciona para SKU y UPC)
+    var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigo).get();
     if (doc.exists) {
       masterData = doc.data();
-      desc = masterData?['descripcion'] ?? 'Sin Nombre';
-      prov = masterData?['nombreProveedor'] ?? 'ND';
-      gpo = masterData?['nombreGpoArticulos'] ?? 'SIN GRUPO';
+    } else {
+      // 2. Respaldo por si el UPC está guardado como campo interno
+      var qEan = await FirebaseFirestore.instance.collection('maestro_productos').where('ean', isEqualTo: codigo).limit(1).get();
+      if (qEan.docs.isNotEmpty) {
+        masterData = qEan.docs.first.data();
+      } else {
+        var qSku = await FirebaseFirestore.instance.collection('maestro_productos').where('sku', isEqualTo: codigo).limit(1).get();
+        if (qSku.docs.isNotEmpty) {
+          masterData = qSku.docs.first.data();
+        }
+      }
+    }
+
+    if (masterData != null) {
+      // Conversión automática de UPC a SKU Oficial
+      if (masterData['sku'] != null && masterData['sku'].toString().trim().isNotEmpty) {
+        skuOficial = masterData['sku'].toString().trim();
+      }
+      eanOficial = (masterData['ean'] ?? '').toString().trim();
+      desc = masterData['descripcion'] ?? 'Sin Nombre';
+      prov = masterData['nombreProveedor'] ?? 'ND';
+      gpo = masterData['nombreGpoArticulos'] ?? 'SIN GRUPO';
     } else {
       desc = 'ARTÍCULO NUEVO / NO EN CATÁLOGO';
     }
 
+    String fechaEstandar = "${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}";
+
     setState(() {
-      int idx = _manifiesto.indexWhere((e) => e['sku'] == sku && e['fechaRaw'] == _fechaCtrl.text);
+      // Unificar lote si tiene el mismo SKU Oficial y la misma Fecha de Caducidad
+      int idx = _manifiesto.indexWhere((e) {
+        DateTime fExistente = e['fechaCaducidad'] as DateTime;
+        return e['sku'] == skuOficial &&
+               fExistente.year == cad.year &&
+               fExistente.month == cad.month &&
+               fExistente.day == cad.day;
+      });
+
       if (idx != -1) {
-        _manifiesto[idx]['cantidad'] += cant; // Si escanea el mismo, suma la cantidad
+        _manifiesto[idx]['cantidad'] += cant;
       } else {
         _manifiesto.insert(0, {
-          'sku': sku,
+          'sku': skuOficial,
+          'ean': eanOficial,
           'descripcion': desc,
           'cantidad': cant,
           'fechaCaducidad': cad,
-          'fechaRaw': _fechaCtrl.text,
+          'fechaRaw': fechaEstandar,
           'nombreProveedor': prov,
           'nombreGpoArticulos': gpo,
           'datosMaestros': masterData
@@ -85,51 +117,75 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     });
 
     _skuCtrl.clear();
-    _cantCtrl.text = '1'; // Resetea cantidad a 1 por si la cambiaron
-    _skuFocus.requestFocus(); // Vuelve a poner el cursor para el siguiente bip
+    _cantCtrl.text = '1';
+    _skuFocus.requestFocus();
   }
 
   Future<void> _guardarManifiesto() async {
     if (_manifiesto.isEmpty) return;
     setState(() => _guardando = true);
     
+    var refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
     var batch = FirebaseFirestore.instance.batch();
     
     for (var item in _manifiesto) {
-      var ref = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc();
-      Map<String, dynamic> data = {
-        'sku': item['sku'],
-        'descripcion': item['descripcion'],
-        'cantidad': item['cantidad'],
-        'fechaCaducidad': Timestamp.fromDate(item['fechaCaducidad']),
-        'ubicacion': 'OPERACION TIENDA',
-        'nombreProveedor': item['nombreProveedor'],
-        'nombreGpoArticulos': item['nombreGpoArticulos'],
-        'fechaCaptura': FieldValue.serverTimestamp(),
-        'capturista': widget.usuario
-      };
-      if (item['datosMaestros'] != null) {
-        data.addAll({
-          'idProveedor': item['datosMaestros']['idProveedor'],
-          'idCategoria': item['datosMaestros']['idCategoria'],
-          'precioVenta': item['datosMaestros']['precioVenta'],
-          'oh': item['datosMaestros']['oh'],
-        });
+      DateTime cad = item['fechaCaducidad'] as DateTime;
+      Timestamp tsCad = Timestamp.fromDate(cad);
+
+      // Verificar si ya existe el mismo lote (SKU + Fecha) en OPERACION TIENDA para unificarlo
+      var existenteSnap = await refTienda.collection('inventario_activo')
+          .where('sku', isEqualTo: item['sku'])
+          .where('ubicacion', isEqualTo: 'OPERACION TIENDA')
+          .get();
+
+      QueryDocumentSnapshot? docExistente;
+      for (var d in existenteSnap.docs) {
+        DateTime fDoc = (d['fechaCaducidad'] as Timestamp).toDate();
+        if (fDoc.year == cad.year && fDoc.month == cad.month && fDoc.day == cad.day) {
+          docExistente = d;
+          break;
+        }
       }
-      batch.set(ref, data);
+
+      if (docExistente != null) {
+        int cantActual = docExistente['cantidad'] ?? 0;
+        batch.update(docExistente.reference, {'cantidad': cantActual + (item['cantidad'] as int)});
+      } else {
+        var ref = refTienda.collection('inventario_activo').doc();
+        Map<String, dynamic> data = {
+          'sku': item['sku'],
+          'ean': item['ean'] ?? '',
+          'descripcion': item['descripcion'],
+          'cantidad': item['cantidad'],
+          'fechaCaducidad': tsCad,
+          'ubicacion': 'OPERACION TIENDA',
+          'nombreProveedor': item['nombreProveedor'],
+          'nombreGpoArticulos': item['nombreGpoArticulos'],
+          'fechaCaptura': FieldValue.serverTimestamp(),
+          'capturista': widget.usuario
+        };
+        if (item['datosMaestros'] != null) {
+          data.addAll({
+            'idProveedor': item['datosMaestros']['idProveedor'],
+            'idCategoria': item['datosMaestros']['idCategoria'],
+            'precioVenta': item['datosMaestros']['precioVenta'],
+            'oh': item['datosMaestros']['oh'],
+          });
+        }
+        batch.set(ref, data);
+      }
     }
 
-    // Si la bodega no existe, la creamos
-    var ubiSnap = await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').where('nombre', isEqualTo: 'OPERACION TIENDA').get();
+    var ubiSnap = await refTienda.collection('ubicaciones').where('nombre', isEqualTo: 'OPERACION TIENDA').get();
     if (ubiSnap.docs.isEmpty) {
-      batch.set(FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').doc(), {'nombre': 'OPERACION TIENDA'});
+      batch.set(refTienda.collection('ubicaciones').doc(), {'nombre': 'OPERACION TIENDA'});
     }
 
     await batch.commit();
     
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Manifiesto recibido en OPERACION TIENDA'), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Manifiesto recibido y unificado en OPERACION TIENDA'), backgroundColor: Colors.green));
     }
   }
 
@@ -178,7 +234,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: const BorderSide(color: Colors.blueAccent, width: 2)),
               ),
               autofocus: true,
-              onSubmitted: _agregarItem, // Esta línea atrapa el "Enter" del escáner físico
+              onSubmitted: _agregarItem,
             ),
             const SizedBox(height: 15),
             const Align(alignment: Alignment.centerLeft, child: Text('Carrito de Recepción:', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))),

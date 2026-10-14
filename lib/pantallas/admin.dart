@@ -34,11 +34,30 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   final GlobalKey _qrKey = GlobalKey(); 
 
   late DocumentReference _refTienda;
+  String _ultimaActualizacion = "Buscando...";
 
   @override
   void initState() {
     super.initState();
     _refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
+    _obtenerUltimaActualizacion();
+  }
+
+  Future<void> _obtenerUltimaActualizacion() async {
+    try {
+      var doc = await FirebaseFirestore.instance.collection('sistema').doc('catalogo_metadata').get();
+      if (doc.exists) {
+        Timestamp? ts = doc.data()?['ultima_carga'];
+        if (ts != null) {
+          DateTime dt = ts.toDate();
+          if(mounted) setState(() => _ultimaActualizacion = 'Última carga: ${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year} a las ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}');
+          return;
+        }
+      }
+      if(mounted) setState(() => _ultimaActualizacion = 'Catálogo sin cargar');
+    } catch (e) {
+      if(mounted) setState(() => _ultimaActualizacion = 'Error al leer fecha');
+    }
   }
 
   void _mostrarYDescargarQR(String nombreMueble) {
@@ -72,7 +91,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) { debugPrint("Error descargando QR: $e"); }
   }
 
-  // --- BOTÓN 1: CARGA DEL CATÁLOGO MAESTRO (Archivo Reto Zona 9) ---
   Future<void> _cargarCatalogoMaestroZona9() async {
     try {
       FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
@@ -80,7 +98,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         setState(() { _procesando = true; _estado = "Leyendo Catálogo Maestro Zonal (Reto Zona 9)..."; });
         final bytes = resultado.files.single.bytes!;
         
-        // El archivo de Excel suele venir en latin1
         final csvString = latin1.decode(bytes); 
         List<String> filas = const LineSplitter().convert(csvString);
         RegExp separador = RegExp(r',(?=(?:[^"]*"[^"]*")*[^"]*$)');
@@ -90,13 +107,10 @@ class _PantallaAdminState extends State<PantallaAdmin> {
           return;
         }
 
-        // Fila 5 (índice 5 en código) tiene los códigos de centro (0012, 0075...)
         List<String> codigosCentro = filas[5].split(separador).map((e) => e.replaceAll('"', '').trim()).toList();
-        
-        String idTiendaLocal = widget.idTiendaGlobal.split('_').last; // Ej. '0075'
+        String idTiendaLocal = widget.idTiendaGlobal.split('_').last; 
         int columnaTienda = -1;
         
-        // Buscar en qué columna (a partir de la J) está el código de nuestra tienda
         for (int j = 10; j < codigosCentro.length; j++) {
            if (codigosCentro[j] == idTiendaLocal) {
               columnaTienda = j;
@@ -113,13 +127,11 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         WriteBatch lote = db.batch(); 
         int contadorSubidas = 0; int operacionesEnLote = 0;
 
-        // Leer datos desde la fila 7 (índice 7 en código)
         for (var i = 7; i < filas.length; i++) {
           if (filas[i].trim().isEmpty) continue;
           List<String> columnas = filas[i].split(separador);
           
           if (columnas.length > columnaTienda) { 
-            // Basado en "Reto Zona 9"
             String provId = columnas[1].replaceAll('"', '').trim();
             String provNombre = columnas[2].replaceAll('"', '').trim();
             String gpoId = columnas[3].replaceAll('"', '').trim();
@@ -128,8 +140,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             String sku = columnas[7].replaceAll('"', '').trim();
             String desc = columnas[8].replaceAll('"', '').trim();
             String precio = columnas[9].replaceAll('"', '').trim();
-            
-            // EL OH (On-Hand) es lo que viene en la columna específica de nuestra tienda
             String oh = columnas[columnaTienda].replaceAll('"', '').trim();
 
             Map<String, dynamic> dataProducto = {
@@ -141,10 +151,9 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               'ean': ean, 
               'descripcion': desc,
               'precioVenta': precio, 
-              'oh': oh // ¡OH específico de la tienda!
+              'oh': oh 
             };
             
-            // Guardamos el catálogo A NIVEL GLOBAL para que el escáner de todas las tiendas lo encuentre
             if (ean.isNotEmpty && ean != "0" && ean != "NaN") { 
                lote.set(db.collection('maestro_productos').doc(ean), dataProducto); 
                operacionesEnLote++; contadorSubidas++; 
@@ -159,12 +168,18 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         }
         
         if (operacionesEnLote > 0) { await lote.commit(); }
-        setState(() { _procesando = false; _estado = "¡Catálogo Actualizado!\nSe mapearon $contadorSubidas SKUs con el OH de ${widget.nombreTienda}."; });
+        
+        await FirebaseFirestore.instance.collection('sistema').doc('catalogo_metadata').set({
+          'ultima_carga': FieldValue.serverTimestamp(),
+          'usuario_carga': widget.nombreTienda
+        });
+        await _obtenerUltimaActualizacion();
+
+        setState(() { _procesando = false; _estado = "Catálogo Actualizado Exitosamente!\nSe mapearon $contadorSubidas SKUs con el OH de ${widget.nombreTienda}."; });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en Catálogo:\n$e"; }); }
   }
 
-  // --- BOTÓN 2: CARGA DE VENTAS DEL DÍA (Archivo ZRTL_CMP_W056) ---
   Future<void> _cargarVentasDiariasCSV() async {
     try {
       FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
@@ -178,7 +193,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         
         Map<String, int> ventasProcesadas = {};
 
-        // Inicia en la fila 3 (Que equivale a la línea 4 en Excel porque empieza en 0)
         for (var i = 3; i < filas.length; i++) {
           if (filas[i].trim().isEmpty) continue;
           List<String> columnas = filas[i].split(separador);
@@ -186,7 +200,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             String sku = columnas[0].replaceAll('"', '').trim();
             int cantVendida = int.tryParse(columnas[1].replaceAll('"', '').trim()) ?? 0;
             
-            // Ignora negativos (devoluciones)
             if (sku.isNotEmpty && cantVendida > 0) {
               ventasProcesadas[sku] = (ventasProcesadas[sku] ?? 0) + cantVendida;
             }
@@ -199,7 +212,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         for (var sku in ventasProcesadas.keys) {
           int porDescontar = ventasProcesadas[sku]!;
           
-          // Búsqueda del inventario EXCLUSIVO de esta tienda
           var querySnap = await _refTienda.collection('inventario_activo').where('sku', isEqualTo: sku).get();
           
           var docsOrdenados = querySnap.docs.toList();
@@ -210,7 +222,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             String ubiA = (dataA['ubicacion'] ?? '').toString().toUpperCase();
             String ubiB = (dataB['ubicacion'] ?? '').toString().toUpperCase();
             
-            // Prioridad PISO/DISPLAY (0) antes que BODEGA (1)
             int prioA = ubiA.contains('BODEGA') ? 1 : 0;
             int prioB = ubiB.contains('BODEGA') ? 1 : 0;
             if (prioA != prioB) return prioA.compareTo(prioB); 
@@ -301,7 +312,17 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
               const SizedBox(height: 20),
               if (_procesando) const CircularProgressIndicator(color: Colors.amber) else Column(children: [
-                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('1. SUBIR CATÁLOGO ZONAL'), onPressed: _cargarCatalogoMaestroZona9)),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    children: [
+                      SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('1. SUBIR CATÁLOGO ZONAL'), onPressed: _cargarCatalogoMaestroZona9)),
+                      const SizedBox(height: 5),
+                      Text(_ultimaActualizacion, style: const TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 15),
                 SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA'), onPressed: _cargarVentasDiariasCSV)),
               ]),
@@ -429,6 +450,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                           itemBuilder: (context, index) {
                              var doc = snapshot.data!.docs[index];
                              var data = doc.data() as Map<String, dynamic>;
+                             
                              String rol = data['rol'] ?? 'piso';
                              IconData icono = Icons.person;
                              Color colorIcono = Colors.blueAccent;
@@ -439,7 +461,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                              return ListTile(
                                 leading: Icon(icono, color: colorIcono),
                                 title: Text(data['nombre'] ?? 'Sin nombre', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                subtitle: Text('Emp: ${doc.id} • Rol: ${data['rol']}'.toUpperCase(), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                subtitle: Text('Emp: ${doc.id} • Rol: $rol'.toUpperCase(), style: const TextStyle(color: Colors.white54, fontSize: 12)),
                                 trailing: IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => doc.reference.delete()),
                              );
                           }

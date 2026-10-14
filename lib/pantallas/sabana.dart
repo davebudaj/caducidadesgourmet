@@ -7,8 +7,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../modelos/etiqueta_mes.dart';
 
 class PantallaDashboard extends StatefulWidget {
-  final String idTiendaGlobal;
   final String usuarioActual;
+  final String idTiendaGlobal;
   const PantallaDashboard({super.key, required this.usuarioActual, required this.idTiendaGlobal});
   @override
   State<PantallaDashboard> createState() => PantallaDashboardState();
@@ -26,17 +26,23 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   
   late Stream<QuerySnapshot> _inventarioStream; 
 
-  // --- OBTENER ID DE TIENDA DESDE EL NAVEGADOR O USUARIO ACTUAL ---
-  // Nota: Lo ideal es pasar el idTiendaGlobal desde navegacion.dart, 
-  // pero para no alterar la estructura actual, leemos la colección raíz.
-  // Asumiremos que el contexto de la tienda se mantiene global o se adapta.
-  // Por ahora leeremos de 'inventario_activo' globalmente si no se pasa el ID.
-  
   @override
   void initState() {
     super.initState();
-    // En el futuro, esto apuntará a _refTienda.collection('inventario_activo')
     _inventarioStream = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').orderBy('fechaCaducidad').snapshots();
+  }
+
+  Future<String> _traducirCodigoASku(String codigo) async {
+    String limpio = codigo.trim();
+    if (limpio.isEmpty) return limpio;
+    var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(limpio).get();
+    if (doc.exists) {
+      var d = doc.data();
+      if (d != null && d['sku'] != null && d['sku'].toString().trim().isNotEmpty) {
+        return d['sku'].toString().trim();
+      }
+    }
+    return limpio;
   }
 
   void aplicarFiltroEspecial(String riesgo) {
@@ -112,16 +118,17 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 onPressed: () async {
                   Navigator.pop(ctx);
                   var batch = FirebaseFirestore.instance.batch();
+                  var refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
                   
                   for (String id in _seleccionados) {
-                    var docRef = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc(id);
+                    var docRef = refTienda.collection('inventario_activo').doc(id);
                     var docSnap = await docRef.get();
                     if (docSnap.exists) {
                       var d = docSnap.data() as Map<String, dynamic>;
                       int cant = d['cantidad'] ?? 0;
                       double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
                       
-                      var histRef = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').doc();
+                      var histRef = refTienda.collection('historial_tratamientos').doc();
                       batch.set(histRef, {
                         'sku': d['sku'],
                         'descripcion': d['descripcion'],
@@ -326,9 +333,13 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                    if (!skuFocus.hasFocus && skuCtrl.text.isNotEmpty) {
                       setDialogState(() { currentDesc = "Buscando..."; });
                       try {
-                         var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(skuCtrl.text).get();
+                         String codigoEscrito = skuCtrl.text.trim();
+                         var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigoEscrito).get();
                          if (masterDoc.exists) {
                             updatedMasterData = masterDoc.data();
+                            if (updatedMasterData?['sku'] != null && updatedMasterData!['sku'].toString().trim().isNotEmpty) {
+                               skuCtrl.text = updatedMasterData!['sku'].toString().trim();
+                            }
                             setDialogState(() { currentDesc = updatedMasterData?['descripcion'] ?? 'Sin Nombre'; });
                          } else {
                             updatedMasterData = null;
@@ -350,7 +361,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             TextField(
                                controller: skuCtrl,
                                focusNode: skuFocus,
-                               decoration: const InputDecoration(labelText: 'SKU / EAN', labelStyle: TextStyle(color: Colors.amber), filled: true, fillColor: Colors.white10),
+                               decoration: const InputDecoration(labelText: 'SKU / UPC', labelStyle: TextStyle(color: Colors.amber), filled: true, fillColor: Colors.white10),
                             ),
                             const SizedBox(height: 5),
                             Align(alignment: Alignment.centerLeft, child: Text(currentDesc, style: const TextStyle(fontSize: 10, color: Colors.greenAccent))),
@@ -385,11 +396,17 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
                       ElevatedButton(
                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-                         onPressed: () {
+                         onPressed: () async {
                             int? nCant = int.tryParse(cantCtrl.text);
-                            String nSku = skuCtrl.text;
+                            String nSku = await _traducirCodigoASku(skuCtrl.text);
                             
                             if(nCant != null && nSku.isNotEmpty) {
+                               var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(nSku).get();
+                               if (masterDoc.exists) {
+                                  updatedMasterData = masterDoc.data();
+                                  currentDesc = updatedMasterData?['descripcion'] ?? currentDesc;
+                               }
+
                                Map<String, dynamic> updateData = {
                                   'cantidad': nCant,
                                   'sku': nSku, 
@@ -399,6 +416,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                
                                if(updatedMasterData != null) {
                                    updateData.addAll({
+                                      'ean': updatedMasterData!['ean'] ?? '',
                                       'idProveedor': updatedMasterData!['idProveedor'],
                                       'nombreProveedor': updatedMasterData!['nombreProveedor'],
                                       'idCategoria': updatedMasterData!['idCategoria'],
@@ -415,9 +433,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                    });
                                }
 
-                               docSnap.reference.update(updateData);
-                               Navigator.pop(context);
-                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro actualizado con éxito'), backgroundColor: Colors.green));
+                               await docSnap.reference.update(updateData);
+                               if (mounted) {
+                                  Navigator.pop(context);
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro actualizado con SKU oficial'), backgroundColor: Colors.green));
+                               }
                             }
                          },
                          child: const Text('GUARDAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
@@ -528,13 +548,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             var data = doc.data() as Map<String, dynamic>;
             String desc = (data['descripcion'] ?? '').toString().toLowerCase();
             String sku = (data['sku'] ?? '').toString().toLowerCase();
+            String ean = (data['ean'] ?? '').toString().toLowerCase();
             String prov = (data['nombreProveedor'] ?? 'ND').toString();
             String gpo = (data['nombreGpoArticulos'] ?? 'ND').toString();
 
             DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
             int dias = cad.difference(DateTime.now()).inDays;
 
-            bool coincideBusqueda = _busqueda.isEmpty || desc.contains(_busqueda) || sku.contains(_busqueda);
+            bool coincideBusqueda = _busqueda.isEmpty || desc.contains(_busqueda) || sku.contains(_busqueda) || ean.contains(_busqueda);
             bool coincideProv = _filtroProveedor == null || prov == _filtroProveedor;
             bool coincideGpo = _filtroGrupo == null || gpo == _filtroGrupo;
             
@@ -595,7 +616,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     TextField(
                       controller: _busquedaController,
                       decoration: InputDecoration(
-                        hintText: 'Buscar SKU o Artículo...',
+                        hintText: 'Buscar SKU, UPC o Artículo...',
                         prefixIcon: const Icon(Icons.search, color: Colors.amber),
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
@@ -606,8 +627,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                MaterialPageRoute(builder: (context) => const PantallaEscanerRapido())
                              );
                              if (codigoEscaneado != null && codigoEscaneado.isNotEmpty) {
-                                _busquedaController.text = codigoEscaneado;
-                                setState(() => _busqueda = codigoEscaneado.toLowerCase());
+                                String skuTraducido = await _traducirCodigoASku(codigoEscaneado);
+                                _busquedaController.text = skuTraducido;
+                                setState(() => _busqueda = skuTraducido.toLowerCase());
                              }
                           }
                         ),
@@ -616,6 +638,13 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         contentPadding: const EdgeInsets.symmetric(vertical: 0)
                       ),
                       onChanged: (v) => setState(() => _busqueda = v.toLowerCase()),
+                      onSubmitted: (v) async {
+                        String traducido = await _traducirCodigoASku(v);
+                        if (traducido != v.trim()) {
+                          _busquedaController.text = traducido;
+                          setState(() => _busqueda = traducido.toLowerCase());
+                        }
+                      },
                     ),
                     const SizedBox(height: 10),
                     Row(
@@ -749,7 +778,7 @@ class _PantallaEscanerRapidoState extends State<PantallaEscanerRapido> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Escanear SKU para buscar', style: TextStyle(color: Colors.amber))),
+      appBar: AppBar(title: const Text('Escanear SKU / UPC para buscar', style: TextStyle(color: Colors.amber))),
       body: MobileScanner(
         onDetect: (capture) {
           if (_yaEscaneado) return; 
