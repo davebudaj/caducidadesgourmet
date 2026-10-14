@@ -217,7 +217,9 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
 
   void _navegarASabanaConFiltro(String filtroRiesgo) {
     setState(() => _indiceActual = 1);
-    _dashboardKey.currentState?.aplicarFiltroEspecial(filtroRiesgo);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _dashboardKey.currentState?.aplicarFiltroEspecial(filtroRiesgo);
+    });
   }
 
   @override
@@ -256,7 +258,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 2, color: Colors.white),
         ),
       ),
-      body: IndexedStack(index: _indiceActual, children: pantallas),
+      body: pantallas[_indiceActual],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         selectedFontSize: 10,
