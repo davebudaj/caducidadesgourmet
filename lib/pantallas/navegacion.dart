@@ -101,7 +101,24 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
             criticos++;
           }
 
-          if (dias <= 45 && dias > 0 && data['misionGenerada45d'] != true) {
+          if (dias <= 15 && data['misionReactivada15d'] != true) {
+            var refMision = refTienda.collection('misiones_auditoria').doc();
+            batch.set(refMision, {
+              'sku': data['sku'],
+              'descripcion': data['descripcion'] ?? 'ND',
+              'ubicacion': data['ubicacion'] ?? 'ND',
+              'cantidad': data['cantidad'],
+              'fechaCaducidad': data['fechaCaducidad'],
+              'nombreProveedor': data['nombreProveedor'] ?? 'ND',
+              'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
+              'estado': 'pendiente',
+              'soloMermaODevolucion': true,
+              'fechaGeneracion': FieldValue.serverTimestamp(),
+              'mensaje': '🔥 REACTIVACIÓN 15 DÍAS: Lote en límite crítico. Proceder únicamente con Merma o Devolución',
+            });
+            batch.update(doc.reference, {'misionReactivada15d': true});
+            misionesNuevas++;
+          } else if (dias <= 45 && dias > 15 && data['misionGenerada45d'] != true) {
             var refMision = refTienda.collection('misiones_auditoria').doc();
             batch.set(refMision, {
               'sku': data['sku'],
@@ -227,7 +244,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
     List<Widget> pantallas = [
       PantallaEscaner(estaActiva: _indiceActual == 0, usuarioRegistra: widget.nombreUsuario, idTiendaGlobal: widget.idTiendaGlobal),
       PantallaDashboard(key: _dashboardKey, usuarioActual: widget.nombreUsuario, idTiendaGlobal: widget.idTiendaGlobal),
-      PantallaMisiones(idTiendaGlobal: widget.idTiendaGlobal),
+      PantallaMisiones(idTiendaGlobal: widget.idTiendaGlobal, usuarioActual: widget.nombreUsuario),
     ];
     List<BottomNavigationBarItem> items = [
       const BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Escáner'),

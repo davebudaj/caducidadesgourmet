@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'trasvase_pantallas.dart';
+import 'finanzas.dart';
 
 class PantallaMisiones extends StatefulWidget {
   final String idTiendaGlobal;
-  const PantallaMisiones({super.key, required this.idTiendaGlobal});
+  final String usuarioActual;
+  const PantallaMisiones({super.key, required this.idTiendaGlobal, required this.usuarioActual});
 
   @override
   State<PantallaMisiones> createState() => _PantallaMisionesState();
@@ -11,57 +14,431 @@ class PantallaMisiones extends StatefulWidget {
 
 class _PantallaMisionesState extends State<PantallaMisiones> {
   bool _actualizando = false;
+  bool _verHistorial = false;
+  static const String kUbicacionTransito = 'EN TRÁNSITO';
+
+  CollectionReference<Map<String, dynamic>> get _refInv =>
+      FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo');
+
+  CollectionReference<Map<String, dynamic>> get _refMisiones =>
+      FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('misiones_auditoria');
+
+  CollectionReference<Map<String, dynamic>> get _refHist =>
+      FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos');
 
   int _getPriority(Map<String, dynamic> m) {
     String msg = (m['mensaje'] ?? '').toString();
     if (msg.contains('CARRITO ABANDONADO')) return 0;
-    if (msg.contains('90 DÍAS')) return 1;
-    if (msg.contains('45 días')) return 2;
-    if (m['descontado'] != null) return 3;
-    return 4;
+    if (msg.contains('REACTIVACIÓN 15 DÍAS') || m['soloMermaODevolucion'] == true) return 1;
+    if (msg.contains('90 DÍAS')) return 2;
+    if (msg.contains('45 días')) return 3;
+    if (m['descontado'] != null) return 4;
+    return 5;
   }
 
-  Widget _buildHeader(int priority) {
+  Widget _buildHeader(int priority, bool completada) {
+    if (completada) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        color: Colors.green.shade800,
+        width: double.infinity,
+        child: const Text('✅ MISIÓN COMPLETADA (Toca ↩️ para Deshacer / Restaurar)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
+      );
+    }
     if (priority == 0) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         color: Colors.deepOrangeAccent,
         width: double.infinity,
-        child: const Text('🛒 URGENTE: CARRITO TEMPORAL SIN ACOMODAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 1)),
+        child: const Text('🛒 URGENTE: CARRITO SIN ACOMODAR (Mantén presionado para abrir)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
       );
     }
     if (priority == 1) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-        color: Colors.pinkAccent,
+        color: Colors.redAccent.shade700,
         width: double.infinity,
-        child: const Text('🚨 URGENTE: POLÍTICA BODEGA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 1)),
+        child: const Text('🔥 CRÍTICO ≤15 DÍAS: REACTIVACIÓN (Solo Merma o Devolución)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
       );
     }
     if (priority == 2) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-        color: Colors.orangeAccent,
+        color: Colors.pinkAccent,
         width: double.infinity,
-        child: const Text('⚠️ ALERTA: CADUCIDAD CERCANA', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 1)),
+        child: const Text('🚨 URGENTE: POLÍTICA BODEGA (Mantén presionado -> Enviar a Carrito)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
       );
     }
     if (priority == 3) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        color: Colors.orangeAccent,
+        width: double.infinity,
+        child: const Text('⚠️ ALERTA: CADUCIDAD 45 DÍAS (Mantén presionado -> Dar Tratamiento)', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 10)),
+      );
+    }
+    if (priority == 4) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         color: Colors.blueAccent,
         width: double.infinity,
-        child: const Text('🛒 OPERACIÓN: DESCONTAR VENTA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 1)),
+        child: const Text('🛒 OPERACIÓN: DESCONTAR VENTA (Mantén presionado -> Opciones)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
       );
     }
     return const SizedBox.shrink();
   }
 
+  Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _buscarLoteInventario(Map<String, dynamic> m) async {
+    String sku = (m['sku'] ?? '').toString();
+    String ubi = (m['ubicacion'] ?? '').toString();
+    Timestamp? ts = m['fechaCaducidad'];
+
+    var snap = await _refInv.where('sku', isEqualTo: sku).get();
+    for (var doc in snap.docs) {
+      var d = doc.data();
+      if ((d['ubicacion'] ?? '') == ubi && ts != null && d['fechaCaducidad'] != null) {
+        DateTime f1 = ts.toDate();
+        DateTime f2 = (d['fechaCaducidad'] as Timestamp).toDate();
+        if (f1.year == f2.year && f1.month == f2.month && f1.day == f2.day) return doc;
+      }
+    }
+    for (var doc in snap.docs) {
+      if ((doc.data()['ubicacion'] ?? '') == ubi) return doc;
+    }
+    return snap.docs.isNotEmpty ? snap.docs.first : null;
+  }
+
+  void _ejecutarAccionMision(QueryDocumentSnapshot docMision, int prioridad) {
+    var m = docMision.data() as Map<String, dynamic>;
+    if (prioridad == 0) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => PantallaCarritoTemporal(idTiendaGlobal: widget.idTiendaGlobal, usuarioRegistra: widget.usuarioActual)));
+    } else if (prioridad == 1) {
+      _dialogoTratamientoDesdeMision(docMision, m, soloMermaODevolucion: true);
+    } else if (prioridad == 2) {
+      _dialogoEnviarBodegaACarrito(docMision, m);
+    } else if (prioridad == 3) {
+      _dialogoTratamientoDesdeMision(docMision, m, soloMermaODevolucion: false);
+    } else if (prioridad == 4) {
+      _dialogoAuditoriaVenta(docMision, m);
+    }
+  }
+
+  // DESHACER / RESTAURAR MISIÓN DESDE EL HISTORIAL
+  void _dialogoDeshacerMision(QueryDocumentSnapshot docMision) {
+    var m = docMision.data() as Map<String, dynamic>;
+    int cant = m['cantidadAfectada'] ?? m['cantidad'] ?? m['descontado'] ?? 1;
+    String ubiOriginal = (m['ubicacion'] ?? 'PISO').toString();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 2)),
+        title: const Text('↩️ Deshacer Misión Completada', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(m['descripcion'] ?? m['sku'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('Ubicación: $ubiOriginal • Cantidad: $cant pzas', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 12),
+            const Text('¿Cómo deseas revertir esta misión?', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(foregroundColor: Colors.blueAccent, side: const BorderSide(color: Colors.blueAccent)),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await docMision.reference.update({'estado': 'pendiente'});
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('📋 Misión reabierta en Pendientes'), backgroundColor: Colors.blueAccent));
+            },
+            child: const Text('SOLO REABRIR MISIÓN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent, foregroundColor: Colors.black),
+            icon: const Icon(Icons.settings_backup_restore, size: 18),
+            label: const Text('REABRIR Y RESTAURAR LOTE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              var docInv = await _buscarLoteInventario(m);
+              var batch = FirebaseFirestore.instance.batch();
+
+              if (docInv != null) {
+                int cantActual = docInv.data()['cantidad'] ?? 0;
+                batch.update(docInv.reference, {
+                  'cantidad': (m['accionRealizada'] == 'promocion') ? cantActual : (cantActual + cant),
+                  'enPromocion': FieldValue.delete(),
+                  'piezasEnPromocion': FieldValue.delete(),
+                });
+              } else {
+                batch.set(_refInv.doc(), {
+                  'sku': m['sku'],
+                  'descripcion': m['descripcion'] ?? 'ND',
+                  'ubicacion': ubiOriginal,
+                  'cantidad': cant,
+                  'fechaCaducidad': m['fechaCaducidad'],
+                  'nombreProveedor': m['nombreProveedor'] ?? 'ND',
+                  'nombreGpoArticulos': m['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                  'precioVenta': m['precioVenta'] ?? '0',
+                  'oh': m['oh'] ?? '0',
+                  'fechaCaptura': FieldValue.serverTimestamp(),
+                  'capturista': widget.usuarioActual,
+                });
+              }
+              if (m['accionRealizada'] == 'carrito') {
+                var qTrans = await _refInv.where('ubicacion', isEqualTo: kUbicacionTransito).where('sku', isEqualTo: m['sku']).get();
+                for (var dT in qTrans.docs) {
+                  if ((dT.data()['ubicacionOrigen'] ?? '') == ubiOriginal) {
+                    int cTrans = dT.data()['cantidad'] ?? 0;
+                    if (cTrans <= cant) {
+                      batch.delete(dT.reference);
+                    } else {
+                      batch.update(dT.reference, {'cantidad': cTrans - cant});
+                    }
+                    break;
+                  }
+                }
+              }
+              batch.update(docMision.reference, {'estado': 'pendiente'});
+              await batch.commit();
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('✅ Misión reactivada y lote restaurado en $ubiOriginal'), backgroundColor: Colors.green),
+                );
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _dialogoEnviarBodegaACarrito(QueryDocumentSnapshot docMision, Map<String, dynamic> m) async {
+    var docInv = await _buscarLoteInventario(m);
+    if (!mounted) return;
+    if (docInv == null) {
+      await docMision.reference.update({'estado': 'completada', 'completadaPor': widget.usuarioActual});
+      return;
+    }
+
+    var dataInv = docInv.data();
+    int cantDisponible = dataInv['cantidad'] ?? 1;
+    TextEditingController cantCtrl = TextEditingController(text: cantDisponible.toString());
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('🚨 Extraer al Carrito Temporal', style: TextStyle(color: Colors.pinkAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: TextField(
+          controller: cantCtrl,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: InputDecoration(labelText: 'Piezas a subir al Carrito (Máx: $cantDisponible)', filled: true, fillColor: Colors.white10),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.pinkAccent, foregroundColor: Colors.white),
+            onPressed: () async {
+              int cantMover = (int.tryParse(cantCtrl.text.trim()) ?? 0).clamp(0, cantDisponible);
+              if (cantMover <= 0) return;
+              Navigator.pop(ctx);
+
+              var batch = FirebaseFirestore.instance.batch();
+              if (cantDisponible <= cantMover) batch.delete(docInv.reference);
+              else batch.update(docInv.reference, {'cantidad': cantDisponible - cantMover});
+
+              var nuevoLote = Map<String, dynamic>.from(dataInv);
+              nuevoLote['cantidad'] = cantMover;
+              nuevoLote['ubicacion'] = kUbicacionTransito;
+              nuevoLote['ubicacionOrigen'] = dataInv['ubicacion'];
+              nuevoLote['fechaTransito'] = FieldValue.serverTimestamp();
+              nuevoLote['usuarioTransito'] = widget.usuarioActual;
+              batch.set(_refInv.doc(), nuevoLote);
+
+              batch.update(docMision.reference, {
+                'estado': 'completada',
+                'completadaPor': widget.usuarioActual,
+                'accionRealizada': 'carrito',
+                'cantidadAfectada': cantMover,
+              });
+              await batch.commit();
+            },
+            child: const Text('CARGAR AL CARRITO'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _dialogoTratamientoDesdeMision(QueryDocumentSnapshot docMision, Map<String, dynamic> m, {required bool soloMermaODevolucion}) async {
+    var docInv = await _buscarLoteInventario(m);
+    if (!mounted) return;
+    if (docInv == null) {
+      await docMision.reference.update({'estado': 'completada', 'completadaPor': widget.usuarioActual});
+      return;
+    }
+
+    var d = docInv.data();
+    int cantOriginal = d['cantidad'] ?? 1;
+    DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+    int dias = cad.difference(DateTime.now()).inDays;
+    bool restringir = soloMermaODevolucion || d['enPromocion'] == true || dias <= 15;
+
+    TextEditingController cantCtrl = TextEditingController(text: cantOriginal.toString());
+    String motivoSeleccionado = restringir ? 'Merma / Destrucción' : 'Saldado / Promoción';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          bool esPromocion = motivoSeleccionado == 'Saldado / Promoción';
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            title: Text(restringir ? '🔥 Baja Definitiva (≤ 15 Días)' : '⚠️ Tratamiento (45 Días)', style: TextStyle(color: restringir ? Colors.redAccent : Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(d['descripcion'] ?? d['sku'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                if (restringir)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text('⚠️ Lote reactivado / crítico (≤15 días): Solo admite Merma o Devolución.', style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                const SizedBox(height: 12),
+                TextField(controller: cantCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Piezas a tratar', filled: true, fillColor: Colors.white10)),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Motivo de Salida', filled: true, fillColor: Colors.white10),
+                  dropdownColor: const Color(0xFF2C2C2C),
+                  value: motivoSeleccionado,
+                  items: [
+                    if (!restringir) const DropdownMenuItem(value: 'Saldado / Promoción', child: Text('🏷️ Saldado / Promoción')),
+                    const DropdownMenuItem(value: 'Merma / Destrucción', child: Text('📉 Merma / Destrucción')),
+                    const DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
+                  ],
+                  onChanged: (val) => setDialogState(() => motivoSeleccionado = val!),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                onPressed: () async {
+                  int cantATratar = (int.tryParse(cantCtrl.text.trim()) ?? 0).clamp(0, cantOriginal);
+                  if (cantATratar <= 0) return;
+                  Navigator.pop(ctx);
+
+                  double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
+                  var batch = FirebaseFirestore.instance.batch();
+
+                  batch.set(_refHist.doc(), {
+                    'sku': d['sku'],
+                    'descripcion': d['descripcion'],
+                    'nombreProveedor': d['nombreProveedor'] ?? 'ND',
+                    'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                    'ubicacion': d['ubicacion'],
+                    'cantidadTratada': cantATratar,
+                    'motivo': motivoSeleccionado,
+                    'costoTotal': cantATratar * precio,
+                    'fechaTratamiento': FieldValue.serverTimestamp(),
+                    'usuario': widget.usuarioActual,
+                  });
+                  FinanzasService.actualizarResumenEnBatch(
+                    batch: batch,
+                    idTiendaGlobal: widget.idTiendaGlobal,
+                    motivo: motivoSeleccionado,
+                    cantidad: cantATratar,
+                    monto: cantATratar * precio,
+                  );
+
+                  if (esPromocion) {
+                    batch.update(docInv.reference, {'enPromocion': true, 'piezasEnPromocion': cantATratar});
+                  } else {
+                    if (cantATratar == cantOriginal) batch.delete(docInv.reference);
+                    else batch.update(docInv.reference, {'cantidad': cantOriginal - cantATratar});
+                  }
+
+                  batch.update(docMision.reference, {
+                    'estado': 'completada',
+                    'completadaPor': widget.usuarioActual,
+                    'accionRealizada': esPromocion ? 'promocion' : 'retiro',
+                    'cantidadAfectada': cantATratar,
+                    'precioVenta': d['precioVenta'] ?? '0',
+                    'oh': d['oh'] ?? '0',
+                  });
+                  await batch.commit();
+                },
+                child: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _dialogoAuditoriaVenta(QueryDocumentSnapshot docMision, Map<String, dynamic> m) {
+    int descontado = m['descontado'] ?? 1;
+    String ubicacion = (m['ubicacion'] ?? 'PISO').toString();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('🛒 Auditoría Física de Venta', style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: Text('SAP descontó $descontado pza(s) en $ubicacion.\n¿Confirmas que el lote físico coincide o deseas restaurar las piezas?', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR')),
+          OutlinedButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              var docInv = await _buscarLoteInventario(m);
+              var batch = FirebaseFirestore.instance.batch();
+              if (docInv != null) {
+                batch.update(docInv.reference, {'cantidad': (docInv.data()['cantidad'] ?? 0) + descontado});
+              } else {
+                batch.set(_refInv.doc(), {
+                  'sku': m['sku'],
+                  'descripcion': m['descripcion'] ?? 'ND',
+                  'ubicacion': ubicacion,
+                  'cantidad': descontado,
+                  'fechaCaducidad': m['fechaCaducidad'],
+                  'nombreProveedor': m['nombreProveedor'] ?? 'ND',
+                  'nombreGpoArticulos': m['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                  'fechaCaptura': FieldValue.serverTimestamp(),
+                  'capturista': widget.usuarioActual,
+                });
+              }
+              batch.update(docMision.reference, {'estado': 'completada', 'completadaPor': widget.usuarioActual});
+              await batch.commit();
+            },
+            child: const Text('RESTAURAR AL MUEBLE', style: TextStyle(color: Colors.orangeAccent, fontSize: 11)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await docMision.reference.update({'estado': 'completada', 'completadaPor': widget.usuarioActual});
+            },
+            child: const Text('CORRECTO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _generarMisionesAutomaticas() async {
     setState(() => _actualizando = true);
     try {
-      var refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
-      var snapshot = await refTienda.collection('inventario_activo').get();
+      var snapshot = await _refInv.get();
       DateTime hoy = DateTime.now();
       var batch = FirebaseFirestore.instance.batch();
       int misionesNuevas = 0;
@@ -70,42 +447,29 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
         var data = doc.data();
         String ubicacion = (data['ubicacion'] ?? '').toString().toUpperCase();
 
-        if (ubicacion == 'EN TRÁNSITO' && data['misionTransitoGenerada'] != true) {
-          Timestamp? tsTransito = data['fechaTransito'];
-          bool esDeDiaAnterior = false;
-          if (tsTransito != null) {
-            DateTime fT = tsTransito.toDate();
-            esDeDiaAnterior = (fT.year != hoy.year || fT.month != hoy.month || fT.day != hoy.day);
-          } else {
-            esDeDiaAnterior = true;
-          }
+        if (data['fechaCaducidad'] != null) {
+          DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
+          int dias = cad.difference(hoy).inDays;
 
-          if (esDeDiaAnterior) {
-            var refMision = refTienda.collection('misiones_auditoria').doc();
-            batch.set(refMision, {
+          // Reactivación crítica a los 15 días (Solo Merma o Devolución)
+          if (dias <= 15 && data['misionReactivada15d'] != true) {
+            batch.set(_refMisiones.doc(), {
               'sku': data['sku'],
               'descripcion': data['descripcion'] ?? 'ND',
-              'ubicacion': 'EN TRÁNSITO (Origen: ${data['ubicacionOrigen'] ?? 'ND'})',
+              'ubicacion': data['ubicacion'] ?? 'ND',
               'cantidad': data['cantidad'],
               'fechaCaducidad': data['fechaCaducidad'],
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              'soloMermaODevolucion': true,
               'fechaGeneracion': FieldValue.serverTimestamp(),
-              'mensaje': '🚨 CARRITO ABANDONADO: Mercancía en tránsito desde el día anterior sin acomodar',
+              'mensaje': '🔥 REACTIVACIÓN 15 DÍAS: Lote en límite crítico. Proceder únicamente con Merma o Devolución',
             });
-            batch.update(doc.reference, {'misionTransitoGenerada': true});
+            batch.update(doc.reference, {'misionReactivada15d': true});
             misionesNuevas++;
-          }
-        }
-
-        if (data['fechaCaducidad'] != null) {
-          DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
-          int dias = cad.difference(hoy).inDays;
-
-          if (dias <= 45 && dias > 0 && data['misionGenerada45d'] != true) {
-            var refMision = refTienda.collection('misiones_auditoria').doc();
-            batch.set(refMision, {
+          } else if (dias <= 45 && dias > 15 && data['misionGenerada45d'] != true) {
+            batch.set(_refMisiones.doc(), {
               'sku': data['sku'],
               'descripcion': data['descripcion'] ?? 'ND',
               'ubicacion': data['ubicacion'] ?? 'ND',
@@ -122,8 +486,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
           }
 
           if (ubicacion.contains('BODEGA') && dias <= 90 && dias > 0 && data['misionBodega90d'] != true) {
-            var refMision = refTienda.collection('misiones_auditoria').doc();
-            batch.set(refMision, {
+            batch.set(_refMisiones.doc(), {
               'sku': data['sku'],
               'descripcion': data['descripcion'] ?? 'ND',
               'ubicacion': data['ubicacion'] ?? 'ND',
@@ -141,20 +504,6 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
         }
       }
       if (misionesNuevas > 0) await batch.commit();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              misionesNuevas > 0 ? 'Se generaron $misionesNuevas nuevas misiones.' : 'Todo en orden. No hay misiones nuevas.',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            backgroundColor: misionesNuevas > 0 ? Colors.green : Colors.blueAccent,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al actualizar: $e'), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _actualizando = false);
     }
@@ -164,146 +513,142 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Misiones de Auditoría', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Misiones de Auditoría', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         actions: [
           IconButton(
-            icon: _actualizando
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber))
-                : const Icon(Icons.refresh, color: Colors.amber),
-            tooltip: 'Buscar nuevas misiones',
+            icon: _actualizando ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber)) : const Icon(Icons.refresh, color: Colors.amber),
             onPressed: _actualizando ? null : _generarMisionesAutomaticas,
           ),
         ],
       ),
-      body: RefreshIndicator(
-        color: Colors.amber,
-        backgroundColor: const Color(0xFF2C2C2C),
-        onRefresh: _generarMisionesAutomaticas,
-        child: StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('misiones_auditoria').snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent)));
-            if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
-            if (!snapshot.hasData) return const Center(child: Text('Sin misiones pendientes.'));
-
-            var misionesPendientes = snapshot.data!.docs.where((doc) {
-              var data = doc.data() as Map<String, dynamic>;
-              return data['estado'] == 'pendiente';
-            }).toList();
-
-            if (misionesPendientes.isEmpty) {
-              return ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.3),
-                  const Center(
-                    child: Text(
-                      '¡Piso Limpio!\nSin misiones pendientes.',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.greenAccent),
-                      textAlign: TextAlign.center,
+      body: Column(
+        children: [
+          // Pestañas: Pendientes vs Historial de Misiones
+          Container(
+            color: Colors.black,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: !_verHistorial ? Colors.amber : Colors.white10,
+                      foregroundColor: !_verHistorial ? Colors.black : Colors.white70,
                     ),
+                    icon: const Icon(Icons.assignment_late, size: 16),
+                    label: const Text('PENDIENTES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                    onPressed: () => setState(() => _verHistorial = false),
                   ),
-                  const SizedBox(height: 10),
-                  const Center(child: Text('↓ Desliza hacia abajo para actualizar ↓', style: TextStyle(color: Colors.white54, fontStyle: FontStyle.italic))),
-                ],
-              );
-            }
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _verHistorial ? Colors.amber : Colors.white10,
+                      foregroundColor: _verHistorial ? Colors.black : Colors.white70,
+                    ),
+                    icon: const Icon(Icons.history, size: 16),
+                    label: const Text('HISTORIAL (DESHACER)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                    onPressed: () => setState(() => _verHistorial = true),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              color: Colors.amber,
+              onRefresh: _generarMisionesAutomaticas,
+              child: StreamBuilder<QuerySnapshot>(
+                stream: _refMisiones.snapshots(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
 
-            misionesPendientes.sort((a, b) {
-              var dataA = a.data() as Map<String, dynamic>;
-              var dataB = b.data() as Map<String, dynamic>;
-              int pA = _getPriority(dataA);
-              int pB = _getPriority(dataB);
-              if (pA != pB) return pA.compareTo(pB);
-              Timestamp tA = dataA['fechaGeneracion'] ?? Timestamp.now();
-              Timestamp tB = dataB['fechaGeneracion'] ?? Timestamp.now();
-              return tB.compareTo(tA);
-            });
+                  String estadoBuscado = _verHistorial ? 'completada' : 'pendiente';
+                  var lista = snapshot.data!.docs.where((doc) => (doc.data() as Map<String, dynamic>)['estado'] == estadoBuscado).toList();
 
-            return ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: misionesPendientes.length,
-              itemBuilder: (context, i) {
-                var m = misionesPendientes[i].data() as Map<String, dynamic>;
-                bool esAuto = m['mensaje'] != null;
-                int prioridad = _getPriority(m);
-
-                int? cantidad = m['cantidad'] ?? m['descontado'];
-                DateTime? cad = (m['fechaCaducidad'] as Timestamp?)?.toDate();
-                String grupo = m['nombreGpoArticulos'] ?? 'SIN GRUPO';
-                String proveedor = m['nombreProveedor'] ?? 'ND';
-
-                Color borderColor = Colors.white24;
-                if (prioridad == 0) borderColor = Colors.deepOrangeAccent;
-                if (prioridad == 1) borderColor = Colors.pinkAccent;
-                if (prioridad == 2) borderColor = Colors.orangeAccent;
-                if (prioridad == 3) borderColor = Colors.blueAccent;
-
-                return Card(
-                  color: Colors.white10,
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  clipBehavior: Clip.antiAlias,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: borderColor, width: 2)),
-                  child: Column(
-                    children: [
-                      _buildHeader(prioridad),
-                      ListTile(
-                        contentPadding: const EdgeInsets.all(12),
-                        leading: Icon(prioridad == 3 ? Icons.shopping_cart_checkout : Icons.assignment_late, color: borderColor, size: 30),
-                        title: Text(m['descripcion'] ?? m['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(children: [
-                                const Icon(Icons.category, size: 14, color: Colors.blueAccent),
-                                const SizedBox(width: 4),
-                                Expanded(child: Text('Grupo: $grupo', style: const TextStyle(color: Colors.white70), overflow: TextOverflow.ellipsis)),
-                              ]),
-                              const SizedBox(height: 4),
-                              Row(children: [
-                                const Icon(Icons.local_shipping, size: 14, color: Colors.greenAccent),
-                                const SizedBox(width: 4),
-                                Expanded(child: Text('Prov: $proveedor', style: const TextStyle(color: Colors.white70), overflow: TextOverflow.ellipsis)),
-                              ]),
-                              const SizedBox(height: 4),
-                              Row(children: [
-                                const Icon(Icons.location_on, size: 14, color: Colors.white54),
-                                const SizedBox(width: 4),
-                                Expanded(child: Text('Ir a: ${m['ubicacion'] ?? 'ND'}', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))),
-                              ]),
-                              const SizedBox(height: 4),
-                              if (cantidad != null)
-                                Row(children: [
-                                  const Icon(Icons.inventory, size: 14, color: Colors.white54),
-                                  const SizedBox(width: 4),
-                                  Text(prioridad == 3 ? 'Descontar en piso: $cantidad pzas' : 'Cantidad registrada: $cantidad pzas', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
-                                ]),
-                              const SizedBox(height: 4),
-                              if (cad != null)
-                                Row(children: [
-                                  const Icon(Icons.calendar_today, size: 14, color: Colors.white54),
-                                  const SizedBox(width: 4),
-                                  Text('Caducidad exacta: ${cad.day}/${cad.month}/${cad.year}', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
-                                ]),
-                              const SizedBox(height: 6),
-                              if (esAuto) Text(m['mensaje'] ?? '', style: TextStyle(color: borderColor, fontSize: 11, fontStyle: FontStyle.italic)),
-                            ],
-                          ),
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 35),
-                          onPressed: () => misionesPendientes[i].reference.update({'estado': 'completada'}),
-                        ),
+                  if (lista.isEmpty) {
+                    return Center(
+                      child: Text(
+                        _verHistorial ? 'Aún no hay misiones en el historial.' : '¡Piso Limpio!\nSin misiones pendientes.',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.greenAccent),
+                        textAlign: TextAlign.center,
                       ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        ),
+                    );
+                  }
+
+                  lista.sort((a, b) {
+                    var dA = a.data() as Map<String, dynamic>;
+                    var dB = b.data() as Map<String, dynamic>;
+                    if (!_verHistorial) {
+                      int pA = _getPriority(dA);
+                      int pB = _getPriority(dB);
+                      if (pA != pB) return pA.compareTo(pB);
+                    }
+                    Timestamp tA = dA['fechaGeneracion'] ?? Timestamp.now();
+                    Timestamp tB = dB['fechaGeneracion'] ?? Timestamp.now();
+                    return tB.compareTo(tA);
+                  });
+
+                  return ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: lista.length,
+                    itemBuilder: (context, i) {
+                      var docMision = lista[i];
+                      var m = docMision.data() as Map<String, dynamic>;
+                      int prioridad = _getPriority(m);
+                      int? cantidad = m['cantidad'] ?? m['descontado'];
+                      DateTime? cad = (m['fechaCaducidad'] as Timestamp?)?.toDate();
+
+                      Color borderColor = _verHistorial
+                          ? Colors.green
+                          : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : Colors.blueAccent)));
+
+                      return Card(
+                        color: Colors.white10,
+                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        clipBehavior: Clip.antiAlias,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: borderColor, width: 2)),
+                        child: Column(
+                          children: [
+                            _buildHeader(prioridad, _verHistorial),
+                            ListTile(
+                              contentPadding: const EdgeInsets.all(12),
+                              onTap: _verHistorial ? () => _dialogoDeshacerMision(docMision) : () => _ejecutarAccionMision(docMision, prioridad),
+                              onLongPress: _verHistorial ? () => _dialogoDeshacerMision(docMision) : () => _ejecutarAccionMision(docMision, prioridad),
+                              title: Text(m['descripcion'] ?? m['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 6),
+                                  Text('📍 Ubicación: ${m['ubicacion'] ?? 'ND'} • 📦 Piezas: ${cantidad ?? 1}', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                                  if (cad != null) Text('📅 Caducidad: ${cad.day}/${cad.month}/${cad.year}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                  if (m['mensaje'] != null) Text(m['mensaje'], style: TextStyle(color: borderColor, fontSize: 11, fontStyle: FontStyle.italic)),
+                                  if (_verHistorial && m['completadaPor'] != null) Text('👤 Cerrada por: ${m['completadaPor']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                ],
+                              ),
+                              trailing: _verHistorial
+                                  ? IconButton(
+                                      icon: const Icon(Icons.undo, color: Colors.orangeAccent, size: 30),
+                                      tooltip: 'Deshacer / Restaurar',
+                                      onPressed: () => _dialogoDeshacerMision(docMision),
+                                    )
+                                  : IconButton(
+                                      icon: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 34),
+                                      tooltip: 'Procesar misión',
+                                      onPressed: () => _ejecutarAccionMision(docMision, prioridad),
+                                    ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

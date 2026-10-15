@@ -5,6 +5,7 @@ import 'package:universal_html/html.dart' as html;
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../modelos/etiqueta_mes.dart';
+import 'finanzas.dart';
 
 class PantallaDashboard extends StatefulWidget {
   final String usuarioActual;
@@ -141,8 +142,23 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         'fechaTratamiento': FieldValue.serverTimestamp(),
                         'usuario': widget.usuarioActual
                       });
+                      FinanzasService.actualizarResumenEnBatch(
+                        batch: batch,
+                        idTiendaGlobal: widget.idTiendaGlobal,
+                        motivo: motivoSeleccionado,
+                        cantidad: cant,
+                        monto: cant * precio,
+                      );
                       
-                      batch.delete(docRef);
+                      if (motivoSeleccionado == 'Saldado / Promoción') {
+                        batch.update(docRef, {
+                          'enPromocion': true,
+                          'piezasEnPromocion': cant,
+                          'fechaPromocion': FieldValue.serverTimestamp(),
+                        });
+                      } else {
+                        batch.delete(docRef);
+                      }
                     }
                   }
                   await batch.commit();
@@ -216,6 +232,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   void _dialogoTratamiento(QueryDocumentSnapshot docSnap) {
      var d = docSnap.data() as Map<String, dynamic>;
      int cantOriginal = d['cantidad'] ?? 0;
+     DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+     int dias = cad.difference(DateTime.now()).inDays;
+     bool bloquearPromocion = (d['enPromocion'] == true) || (dias <= 15);
      TextEditingController cantCtrl = TextEditingController(text: cantOriginal.toString());
      String motivoSeleccionado = 'Merma / Destrucción';
 
@@ -238,10 +257,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                      decoration: const InputDecoration(labelText: 'Motivo de Salida', filled: true, fillColor: Colors.white10),
                      dropdownColor: const Color(0xFF2C2C2C),
                      value: motivoSeleccionado,
-                     items: const [
-                       DropdownMenuItem(value: 'Merma / Destrucción', child: Text('📉 Merma / Destrucción')),
-                       DropdownMenuItem(value: 'Saldado / Promoción', child: Text('🏷️ Saldado / Promoción')),
-                       DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
+                     items: [
+                       const DropdownMenuItem(value: 'Merma / Destrucción', child: Text('📉 Merma / Destrucción')),
+                       if (!bloquearPromocion)
+                         const DropdownMenuItem(value: 'Saldado / Promoción', child: Text('🏷️ Saldado / Promoción')),
+                       const DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
                      ],
                      onChanged: (val) => setDialogState(() => motivoSeleccionado = val!),
                    )
@@ -256,7 +276,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                      if (cantATratar > 0 && cantATratar <= cantOriginal) {
                        double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
                        
-                       await FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').add({
+                       var batchTrat = FirebaseFirestore.instance.batch();
+                       var histDoc = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').doc();
+                       batchTrat.set(histDoc, {
                          'sku': d['sku'],
                          'descripcion': d['descripcion'],
                          'nombreProveedor': d['nombreProveedor'] ?? 'ND',
@@ -268,8 +290,22 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                          'fechaTratamiento': FieldValue.serverTimestamp(),
                          'usuario': widget.usuarioActual
                        });
+                       FinanzasService.actualizarResumenEnBatch(
+                         batch: batchTrat,
+                         idTiendaGlobal: widget.idTiendaGlobal,
+                         motivo: motivoSeleccionado,
+                         cantidad: cantATratar,
+                         monto: cantATratar * precio,
+                       );
+                       await batchTrat.commit();
 
-                       if (cantATratar == cantOriginal) {
+                       if (motivoSeleccionado == 'Saldado / Promoción') {
+                         await docSnap.reference.update({
+                           'enPromocion': true,
+                           'piezasEnPromocion': cantATratar,
+                           'fechaPromocion': FieldValue.serverTimestamp(),
+                         });
+                       } else if (cantATratar == cantOriginal) {
                          await docSnap.reference.delete();
                        } else {
                          await docSnap.reference.update({'cantidad': cantOriginal - cantATratar});
@@ -317,136 +353,189 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   void _editarRegistro(QueryDocumentSnapshot docSnap) {
     var d = docSnap.data() as Map<String, dynamic>;
     TextEditingController cantCtrl = TextEditingController(text: d['cantidad'].toString());
-    TextEditingController skuCtrl = TextEditingController(text: d['sku'].toString()); 
-    
+    TextEditingController skuCtrl = TextEditingController(text: d['sku'].toString());
+    DateTime fechaOriginal = (d['fechaCaducidad'] as Timestamp).toDate();
+    DateTime fechaEditada = fechaOriginal;
+
     String currentDesc = d['descripcion'] ?? 'Artículo Nuevo';
     Map<String, dynamic>? updatedMasterData;
     String? localUbi;
-    
+    FocusNode skuFocus = FocusNode();
+    bool listenerAdded = false;
+
     showDialog(
-       context: context,
-       builder: (context) {
-          return StatefulBuilder(
-             builder: (context, setDialogState) {
-                FocusNode skuFocus = FocusNode();
-                skuFocus.addListener(() async {
-                   if (!skuFocus.hasFocus && skuCtrl.text.isNotEmpty) {
-                      setDialogState(() { currentDesc = "Buscando..."; });
-                      try {
-                         String codigoEscrito = skuCtrl.text.trim();
-                         var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigoEscrito).get();
-                         if (masterDoc.exists) {
-                            updatedMasterData = masterDoc.data();
-                            if (updatedMasterData?['sku'] != null && updatedMasterData!['sku'].toString().trim().isNotEmpty) {
-                               skuCtrl.text = updatedMasterData!['sku'].toString().trim();
-                            }
-                            setDialogState(() { currentDesc = updatedMasterData?['descripcion'] ?? 'Sin Nombre'; });
-                         } else {
-                            updatedMasterData = null;
-                            setDialogState(() { currentDesc = 'Artículo Nuevo (No en catálogo)'; });
-                         }
-                      } catch (e) {
-                         setDialogState(() { currentDesc = 'Error al buscar'; });
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            if (!listenerAdded) {
+              listenerAdded = true;
+              skuFocus.addListener(() async {
+                if (!skuFocus.hasFocus && skuCtrl.text.isNotEmpty) {
+                  setDialogState(() => currentDesc = "Buscando...");
+                  try {
+                    String codigoEscrito = skuCtrl.text.trim();
+                    var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigoEscrito).get();
+                    if (masterDoc.exists) {
+                      updatedMasterData = masterDoc.data();
+                      if (updatedMasterData?['sku'] != null && updatedMasterData!['sku'].toString().trim().isNotEmpty) {
+                        skuCtrl.text = updatedMasterData!['sku'].toString().trim();
                       }
-                   }
-                });
+                      setDialogState(() => currentDesc = updatedMasterData?['descripcion'] ?? 'Sin Nombre');
+                    } else {
+                      updatedMasterData = null;
+                      setDialogState(() => currentDesc = 'Artículo Nuevo (No en catálogo)');
+                    }
+                  } catch (e) {
+                    setDialogState(() => currentDesc = 'Error al buscar');
+                  }
+                }
+              });
+            }
 
-                return AlertDialog(
-                   backgroundColor: const Color(0xFF1E1E1E),
-                   title: const Text('Editar Registro', style: TextStyle(color: Colors.amber)),
-                   content: SingleChildScrollView(
-                      child: Column(
-                         mainAxisSize: MainAxisSize.min,
-                         children: [
-                            TextField(
-                               controller: skuCtrl,
-                               focusNode: skuFocus,
-                               decoration: const InputDecoration(labelText: 'SKU / UPC', labelStyle: TextStyle(color: Colors.amber), filled: true, fillColor: Colors.white10),
-                            ),
-                            const SizedBox(height: 5),
-                            Align(alignment: Alignment.centerLeft, child: Text(currentDesc, style: const TextStyle(fontSize: 10, color: Colors.greenAccent))),
-                            const Divider(color: Colors.white12),
-                            TextField(controller: cantCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Cantidad Fija (Piezas)', labelStyle: TextStyle(color: Colors.white54))),
-                            const SizedBox(height: 15),
-                            
-                            StreamBuilder<QuerySnapshot>(
-                               stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
-                               builder: (context, ubiSnapshot) {
-                                  if (!ubiSnapshot.hasData) return const LinearProgressIndicator();
-                                  List<String> validUbis = ubiSnapshot.data!.docs.map((u) => u['nombre'].toString()).toList();
-                                  if(localUbi == null) {
-                                      String currentUbi = d['ubicacion'].toString();
-                                      if(validUbis.contains(currentUbi)) localUbi = currentUbi;
-                                  }
+            String fechaTexto = "${fechaEditada.day.toString().padLeft(2, '0')}/${fechaEditada.month.toString().padLeft(2, '0')}/${fechaEditada.year}";
 
-                                  return DropdownButtonFormField<String?>(
-                                     decoration: const InputDecoration(labelText: "Seleccionar Mueble / Ubicación", labelStyle: TextStyle(color: Colors.amber)),
-                                     dropdownColor: const Color(0xFF2C2C2C),
-                                     value: localUbi,
-                                     hint: const Text("Elige...", style: TextStyle(color: Colors.white24)),
-                                     items: validUbis.map((ubi) => DropdownMenuItem(value: ubi, child: Text(ubi, style: const TextStyle(fontSize: 12)))).toList(),
-                                     onChanged: (val) { setDialogState(() { localUbi = val; }); },
-                                  );
-                               }
-                            ),
-                         ]
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              title: const Text('Editar Registro', style: TextStyle(color: Colors.amber)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: skuCtrl,
+                      focusNode: skuFocus,
+                      decoration: const InputDecoration(labelText: 'SKU / UPC', labelStyle: TextStyle(color: Colors.amber), filled: true, fillColor: Colors.white10),
+                    ),
+                    const SizedBox(height: 5),
+                    Align(alignment: Alignment.centerLeft, child: Text(currentDesc, style: const TextStyle(fontSize: 10, color: Colors.greenAccent))),
+                    const Divider(color: Colors.white12),
+                    TextField(
+                      controller: cantCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Cantidad Fija (Piezas)', labelStyle: TextStyle(color: Colors.white54)),
+                    ),
+                    const SizedBox(height: 15),
+                    StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
+                      builder: (context, ubiSnapshot) {
+                        if (!ubiSnapshot.hasData) return const LinearProgressIndicator();
+                        List<String> validUbis = ubiSnapshot.data!.docs.map((u) => u['nombre'].toString()).toList();
+                        if (localUbi == null) {
+                          String currentUbi = d['ubicacion'].toString();
+                          if (validUbis.contains(currentUbi)) localUbi = currentUbi;
+                        }
+
+                        return DropdownButtonFormField<String?>(
+                          decoration: const InputDecoration(labelText: "Seleccionar Mueble / Ubicación", labelStyle: TextStyle(color: Colors.amber)),
+                          dropdownColor: const Color(0xFF2C2C2C),
+                          value: localUbi,
+                          hint: const Text("Elige...", style: TextStyle(color: Colors.white24)),
+                          items: validUbis.map((ubi) => DropdownMenuItem(value: ubi, child: Text(ubi, style: const TextStyle(fontSize: 12)))).toList(),
+                          onChanged: (val) => setDialogState(() => localUbi = val),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 18),
+                    const Text('Fecha de Caducidad', style: TextStyle(color: Colors.amber, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          backgroundColor: Colors.white10,
+                          side: const BorderSide(color: Colors.amber, width: 1.2),
+                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.calendar_month, color: Colors.amber),
+                        label: Text(
+                          fechaTexto,
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                        ),
+                        onPressed: () async {
+                          DateTime? nuevaFecha = await showDatePicker(
+                            context: context,
+                            initialDate: fechaEditada,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2036),
+                          );
+                          if (nuevaFecha != null) {
+                            setDialogState(() => fechaEditada = nuevaFecha);
+                          }
+                        },
                       ),
-                   ),
-                   actions: [
-                      TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
-                      ElevatedButton(
-                         style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-                         onPressed: () async {
-                            int? nCant = int.tryParse(cantCtrl.text);
-                            String nSku = await _traducirCodigoASku(skuCtrl.text);
-                            
-                            if(nCant != null && nSku.isNotEmpty) {
-                               var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(nSku).get();
-                               if (masterDoc.exists) {
-                                  updatedMasterData = masterDoc.data();
-                                  currentDesc = updatedMasterData?['descripcion'] ?? currentDesc;
-                               }
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                  onPressed: () async {
+                    int? nCant = int.tryParse(cantCtrl.text);
+                    String nSku = await _traducirCodigoASku(skuCtrl.text);
 
-                               Map<String, dynamic> updateData = {
-                                  'cantidad': nCant,
-                                  'sku': nSku, 
-                                  'ubicacion': localUbi, 
-                                  'descripcion': currentDesc 
-                               };
-                               
-                               if(updatedMasterData != null) {
-                                   updateData.addAll({
-                                      'ean': updatedMasterData!['ean'] ?? '',
-                                      'idProveedor': updatedMasterData!['idProveedor'],
-                                      'nombreProveedor': updatedMasterData!['nombreProveedor'],
-                                      'idCategoria': updatedMasterData!['idCategoria'],
-                                      'nombreGpoArticulos': updatedMasterData!['nombreGpoArticulos'],
-                                      'precioVenta': updatedMasterData!['precioVenta'],
-                                      'oh': updatedMasterData!['oh'],
-                                   });
-                               } else if (nSku != d['sku']) {
-                                   updateData.addAll({
-                                      'nombreProveedor': FieldValue.delete(),
-                                      'nombreGpoArticulos': FieldValue.delete(),
-                                      'precioVenta': FieldValue.delete(),
-                                      'oh': FieldValue.delete(),
-                                   });
-                               }
+                    if (nCant != null && nSku.isNotEmpty) {
+                      var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(nSku).get();
+                      if (masterDoc.exists) {
+                        updatedMasterData = masterDoc.data();
+                        currentDesc = updatedMasterData?['descripcion'] ?? currentDesc;
+                      }
 
-                               await docSnap.reference.update(updateData);
-                               if (mounted) {
-                                  Navigator.pop(context);
-                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro actualizado con SKU oficial'), backgroundColor: Colors.green));
-                               }
-                            }
-                         },
-                         child: const Text('GUARDAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-                      )
-                   ]
-                );
-             }
-          );
-       }
+                      Map<String, dynamic> updateData = {
+                        'cantidad': nCant,
+                        'sku': nSku,
+                        'ubicacion': localUbi,
+                        'descripcion': currentDesc,
+                        'fechaCaducidad': Timestamp.fromDate(fechaEditada),
+                      };
+
+                      if (fechaEditada.year != fechaOriginal.year ||
+                          fechaEditada.month != fechaOriginal.month ||
+                          fechaEditada.day != fechaOriginal.day) {
+                        updateData['misionGenerada45d'] = FieldValue.delete();
+                        updateData['misionBodega90d'] = FieldValue.delete();
+                      }
+
+                      if (updatedMasterData != null) {
+                        updateData.addAll({
+                          'ean': updatedMasterData!['ean'] ?? '',
+                          'idProveedor': updatedMasterData!['idProveedor'],
+                          'nombreProveedor': updatedMasterData!['nombreProveedor'],
+                          'idCategoria': updatedMasterData!['idCategoria'],
+                          'nombreGpoArticulos': updatedMasterData!['nombreGpoArticulos'],
+                          'precioVenta': updatedMasterData!['precioVenta'],
+                          'oh': updatedMasterData!['oh'],
+                        });
+                      } else if (nSku != d['sku']) {
+                        updateData.addAll({
+                          'nombreProveedor': FieldValue.delete(),
+                          'nombreGpoArticulos': FieldValue.delete(),
+                          'precioVenta': FieldValue.delete(),
+                          'oh': FieldValue.delete(),
+                        });
+                      }
+
+                      await docSnap.reference.update(updateData);
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Registro actualizado con éxito'), backgroundColor: Colors.green),
+                        );
+                      }
+                    }
+                  },
+                  child: const Text('GUARDAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -650,38 +739,62 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     Row(
                       children: [
                         Expanded(
-                          child: Container(
-                            height: 40, padding: const EdgeInsets.symmetric(horizontal: 10),
-                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String?>(
-                                isExpanded: true, dropdownColor: const Color(0xFF2C2C2C),
-                                value: _filtroProveedor, hint: const Text('Proveedor', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                items: [
-                                  const DropdownMenuItem(value: null, child: Text('Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))), 
-                                  ...provs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
-                                ],
-                                onChanged: (v) => setState(() => _filtroProveedor = v),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro proveedor', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
                               ),
-                            ),
+                              Container(
+                                height: 40,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroProveedor,
+                                    hint: const Text('Filtro proveedor', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Filtro proveedor: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
+                                      ...provs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroProveedor = v),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: Container(
-                            height: 40, padding: const EdgeInsets.symmetric(horizontal: 10),
-                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String?>(
-                                isExpanded: true, dropdownColor: const Color(0xFF2C2C2C),
-                                value: _filtroGrupo, hint: const Text('Gpo Artículos', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                items: [
-                                  const DropdownMenuItem(value: null, child: Text('Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))), 
-                                  ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
-                                ],
-                                onChanged: (v) => setState(() => _filtroGrupo = v),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro Grupo de Art.', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
                               ),
-                            ),
+                              Container(
+                                height: 40,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroGrupo,
+                                    hint: const Text('Filtro Grupo de Art.', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Filtro Grupo de Art.: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
+                                      ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroGrupo = v),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -743,6 +856,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(d['cantidad'].toString() + ' pzas • Ubicación: ' + d['ubicacion'].toString(), style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    if (d['enPromocion'] == true)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text('🏷️ EN PROMOCIÓN / SALDADO (${d['piezasEnPromocion'] ?? d['cantidad']} pzas) - Pendiente venta o baja', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                      ),
                                     if (d['comentarioCorporativo'] != null)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),
