@@ -35,12 +35,14 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
   late DocumentReference _refTienda;
   String _ultimaActualizacion = "Buscando...";
+  String _ultimoBackup = "Sin respaldo reciente";
 
   @override
   void initState() {
     super.initState();
     _refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
     _obtenerUltimaActualizacion();
+    _obtenerUltimoBackup();
   }
 
   Future<void> _obtenerUltimaActualizacion() async {
@@ -58,6 +60,318 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) {
       if(mounted) setState(() => _ultimaActualizacion = 'Error al leer fecha');
     }
+  }
+
+
+  Future<void> _obtenerUltimoBackup() async {
+    try {
+      var doc = await FirebaseFirestore.instance.collection('sistema').doc('backup_metadata').get();
+      if (doc.exists) {
+        Timestamp? ts = doc.data()?['ultimo_backup'];
+        if (ts != null) {
+          DateTime dt = ts.toDate();
+          if (mounted) {
+            setState(() => _ultimoBackup = 'Último backup global: ${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}');
+          }
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+
+  dynamic _serializarDato(dynamic valor) {
+    if (valor is Timestamp) {
+      return {'__tipo__': 'timestamp', 'iso': valor.toDate().toIso8601String()};
+    } else if (valor is Map) {
+      return valor.map((k, v) => MapEntry(k.toString(), _serializarDato(v)));
+    } else if (valor is List) {
+      return valor.map((e) => _serializarDato(e)).toList();
+    }
+    return valor;
+  }
+
+  dynamic _deserializarDato(dynamic valor) {
+    if (valor is Map) {
+      if (valor['__tipo__'] == 'timestamp' && valor['iso'] != null) {
+        return Timestamp.fromDate(DateTime.parse(valor['iso'].toString()));
+      }
+      return valor.map((k, v) => MapEntry(k.toString(), _deserializarDato(v)));
+    } else if (valor is List) {
+      return valor.map((e) => _deserializarDato(e)).toList();
+    }
+    return valor;
+  }
+
+  Future<void> _exportarBackupJSON() async {
+    setState(() {
+      _procesando = true;
+      _estado = "Empaquetando Backup Multitienda (Todas las sucursales)...";
+    });
+    try {
+      List<String> tiendasIds = [
+        'Z9_0012', 'Z9_0014', 'Z9_0019', 'Z9_0021', 'Z9_0075', 'Z9_0076', 'Z9_0079',
+        'Z9_0102', 'Z9_0134', 'Z9_0191', 'Z9_0304', 'Z9_0307', 'Z9_0458', 'Z9_0472'
+      ];
+      List<String> colecciones = [
+        'inventario_activo', 'misiones_auditoria', 'historial_tratamientos',
+        'ubicaciones', 'colaboradores', 'resumen_financiero'
+      ];
+
+      Map<String, dynamic> backupData = {
+        'version_esquema': '3.0_multitienda',
+        'fecha_exportacion': DateTime.now().toIso8601String(),
+        'tiendas': <String, dynamic>{},
+      };
+
+      int totalDocumentos = 0;
+      var db = FirebaseFirestore.instance;
+
+      for (String idTienda in tiendasIds) {
+        Map<String, dynamic> colsTienda = {};
+        bool tiendaTieneDatos = false;
+
+        for (String col in colecciones) {
+          var snap = await db.collection('tiendas').doc(idTienda).collection(col).get();
+          if (snap.docs.isNotEmpty) {
+            tiendaTieneDatos = true;
+            Map<String, dynamic> docsMap = {};
+            for (var doc in snap.docs) {
+              docsMap[doc.id] = _serializarDato(doc.data());
+              totalDocumentos++;
+            }
+            colsTienda[col] = docsMap;
+          }
+        }
+        if (tiendaTieneDatos) {
+          backupData['tiendas'][idTienda] = colsTienda;
+        }
+      }
+
+      String jsonStr = const JsonEncoder.withIndent('  ').convert(backupData);
+      final bytes = utf8.encode(jsonStr);
+      final blob = html.Blob([bytes], 'application/json');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+
+      DateTime hoy = DateTime.now();
+      String fechaArchivo = "${hoy.year}${hoy.month.toString().padLeft(2, '0')}${hoy.day.toString().padLeft(2, '0')}_${hoy.hour.toString().padLeft(2, '0')}${hoy.minute.toString().padLeft(2, '0')}";
+      String nombreArchivo = "Backup_Multitienda_Zona9_$fechaArchivo.json";
+
+      html.AnchorElement(href: url)
+        ..setAttribute("download", nombreArchivo)
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      await db.collection('sistema').doc('backup_metadata').set({
+        'ultimo_backup': FieldValue.serverTimestamp(),
+        'generado_desde': widget.nombreTienda,
+      }, SetOptions(merge: true));
+      await _obtenerUltimoBackup();
+
+      setState(() {
+        _procesando = false;
+        _estado = "✅ Backup Multitienda descargado ($totalDocumentos registros protegidos).";
+      });
+    } catch (e) {
+      setState(() {
+        _procesando = false;
+        _estado = "Error generando backup: $e";
+      });
+    }
+  }
+
+  Future<void> _restaurarBackupJSON() async {
+    try {
+      FilePickerResult? resultado = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'JSON'],
+      );
+      if (resultado == null || resultado.files.single.bytes == null) return;
+
+      setState(() {
+        _procesando = true;
+        _estado = "Restaurando base de datos multitienda...";
+      });
+
+      String contenido = utf8.decode(resultado.files.single.bytes!);
+      Map<String, dynamic> backupData = jsonDecode(contenido);
+      var db = FirebaseFirestore.instance;
+
+      WriteBatch batch = db.batch();
+      int opCount = 0;
+      int totalRestaurados = 0;
+
+      // Soporta formato Multitienda (v3.0) y formato individual (v2.0)
+      Map<String, dynamic> mapaTiendas = {};
+      if (backupData.containsKey('tiendas')) {
+        mapaTiendas = Map<String, dynamic>.from(backupData['tiendas']);
+      } else if (backupData.containsKey('colecciones')) {
+        String idT = (backupData['id_tienda_global'] ?? widget.idTiendaGlobal).toString();
+        mapaTiendas[idT] = backupData['colecciones'];
+      }
+
+      for (var entryTienda in mapaTiendas.entries) {
+        String idTienda = entryTienda.key;
+        Map<String, dynamic> colecciones = Map<String, dynamic>.from(entryTienda.value);
+
+        for (var entryCol in colecciones.entries) {
+          String nombreCol = entryCol.key;
+          Map<String, dynamic> docsMap = Map<String, dynamic>.from(entryCol.value);
+
+          for (var docEntry in docsMap.entries) {
+            String docId = docEntry.key;
+            Map<String, dynamic> docData = Map<String, dynamic>.from(_deserializarDato(docEntry.value));
+
+            batch.set(db.collection('tiendas').doc(idTienda).collection(nombreCol).doc(docId), docData);
+            opCount++;
+            totalRestaurados++;
+
+            if (opCount >= 400) {
+              await batch.commit();
+              batch = db.batch();
+              opCount = 0;
+            }
+          }
+        }
+      }
+
+      if (opCount > 0) {
+        await batch.commit();
+      }
+
+      setState(() {
+        _procesando = false;
+        _estado = "✅ Restauración exitosa: $totalRestaurados registros cargados en todas las tiendas.";
+      });
+    } catch (e) {
+      setState(() {
+        _procesando = false;
+        _estado = "Error al restaurar backup: $e";
+      });
+    }
+  }
+
+  void _solicitarPasswordBackup(String nombreAccion, VoidCallback accionAutorizada) {
+    final TextEditingController passCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Colors.cyanAccent, width: 1.5),
+        ),
+        title: Row(
+          children: [
+            const Icon(Icons.lock_outline, color: Colors.amber, size: 22),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Autorizar: $nombreAccion',
+                style: const TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: TextField(
+          controller: passCtrl,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Contraseña de seguridad',
+            hintText: 'Ingresa la clave maestra',
+            filled: true,
+            fillColor: Colors.white10,
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (val) {
+            if (val.trim() == 'ADMIN777') {
+              Navigator.pop(ctx);
+              accionAutorizada();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('🔒 Contraseña incorrecta. Acceso denegado.'), backgroundColor: Colors.redAccent),
+              );
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+            onPressed: () {
+              if (passCtrl.text.trim() == 'ADMIN777') {
+                Navigator.pop(ctx);
+                accionAutorizada();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('🔒 Contraseña incorrecta. Acceso denegado.'), backgroundColor: Colors.redAccent),
+                );
+              }
+            },
+            child: const Text('CONFIRMAR', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _verificarPermisoAdminCatalogo() async {
+    bool autorizado = false;
+    final TextEditingController passCtrl = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.amber, width: 1.5)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 24),
+            SizedBox(width: 8),
+            Expanded(child: Text('Catálogo ya actualizado hoy', style: TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold))),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            Text('El Catálogo Maestro Zonal ya fue cargado el día de hoy en esta tienda.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+            SizedBox(height: 12),
+            Text('Para realizar una recarga el mismo día, ingresa la clave maestra ADMIN777:', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
+            SizedBox(height: 8),
+            TextField(
+              controller: passCtrl,
+              obscureText: true,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'Clave Maestra',
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+            onPressed: () {
+              if (passCtrl.text.trim() == 'ADMIN777') {
+                autorizado = true;
+                Navigator.pop(ctx);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🔒 Clave incorrecta.'), backgroundColor: Colors.redAccent));
+              }
+            },
+            child: const Text('AUTORIZAR', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    return autorizado;
   }
 
   void _mostrarYDescargarQR(String nombreMueble) {
@@ -92,6 +406,20 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   }
 
   Future<void> _cargarCatalogoMaestroZona9() async {
+    try {
+      var metaDoc = await FirebaseFirestore.instance.collection('sistema').doc('catalogo_metadata').get();
+      if (metaDoc.exists) {
+        Timestamp? ts = metaDoc.data()?['ultima_carga'];
+        if (ts != null) {
+          DateTime ultimaFecha = ts.toDate();
+          DateTime ahora = DateTime.now();
+          if (ultimaFecha.year == ahora.year && ultimaFecha.month == ahora.month && ultimaFecha.day == ahora.day) {
+            bool ok = await _verificarPermisoAdminCatalogo();
+          }
+        }
+      }
+    } catch (_) {}
+
     try {
       FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
       if (resultado != null && resultado.files.single.bytes != null) {
@@ -325,6 +653,44 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                 ),
                 const SizedBox(height: 15),
                 SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA'), onPressed: _cargarVentasDiariasCSV)),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.cyanAccent.withOpacity(0.4)),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text('Bóveda de Respaldo y Migración', style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                      const SizedBox(height: 4),
+                      Text(_ultimoBackup, style: const TextStyle(color: Colors.white70, fontSize: 11, fontStyle: FontStyle.italic)),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 12)),
+                              icon: const Icon(Icons.download_for_offline, size: 18),
+                              label: const Text('DESCARGAR BACKUP', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                              onPressed: () => _solicitarPasswordBackup('Descargar Backup', _exportarBackupJSON),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(foregroundColor: Colors.amberAccent, side: const BorderSide(color: Colors.amberAccent), padding: const EdgeInsets.symmetric(vertical: 12)),
+                              icon: const Icon(Icons.restore_page, size: 18),
+                              label: const Text('RESTAURAR / MIGRAR', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                              onPressed: () => _solicitarPasswordBackup('Restaurar / Migrar', _restaurarBackupJSON),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ]),
               const SizedBox(height: 40),
               const Divider(color: Colors.white24),
