@@ -83,6 +83,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
                 'nombreProveedor': data['nombreProveedor'] ?? 'ND',
                 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
                 'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
                 'fechaGeneracion': FieldValue.serverTimestamp(),
                 'mensaje': '🚨 CARRITO ABANDONADO: Mercancía en tránsito desde el día anterior sin acomodar',
               });
@@ -112,6 +113,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
               'soloMermaODevolucion': true,
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': '🔥 REACTIVACIÓN 15 DÍAS: Lote en límite crítico. Proceder únicamente con Merma o Devolución',
@@ -129,6 +131,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': 'Verificar lote próximo a vencer (45 días)',
             });
@@ -147,6 +150,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': '🚨 POLÍTICA 90 DÍAS: Extraer de Bodega y reubicar en Piso/Display',
             });

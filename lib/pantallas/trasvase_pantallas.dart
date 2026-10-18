@@ -214,7 +214,14 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
 
   @override
   Widget build(BuildContext context) {
-    var lotesActuales = _ubicacionSeleccionada != null ? (_lotesPorUbicacion[_ubicacionSeleccionada] ?? []) : <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    var lotesActuales = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    if (_ubicacionSeleccionada != null) {
+      for (var entry in _lotesPorUbicacion.entries) {
+        if (entry.key == _ubicacionSeleccionada || entry.key.startsWith('${_ubicacionSeleccionada!} > ')) {
+          lotesActuales.addAll(entry.value);
+        }
+      }
+    }
     var lotesFiltrados = lotesActuales.where((doc) {
       if (_busquedaInterna.isEmpty) return true;
       var d = doc.data();
@@ -473,7 +480,8 @@ class _PantallaCarritoTemporalState extends State<PantallaCarritoTemporal> {
       var transitoSnap = results[0];
       var ubiSnap = results[1];
 
-      List<String> muebles = ubiSnap.docs.map((d) => d['nombre'].toString()).where((n) => n != kUbicacionTransito).toList();
+      List<String> todasUbis = ubiSnap.docs.map((d) => d['nombre'].toString()).where((n) => n != kUbicacionTransito).toList();
+      List<String> muebles = todasUbis.where((u) => !todasUbis.any((otra) => otra.startsWith('$u > '))).toList();
       if (_muebleDestino != null && !muebles.contains(_muebleDestino)) muebles.add(_muebleDestino!);
 
       var docs = transitoSnap.docs.toList();

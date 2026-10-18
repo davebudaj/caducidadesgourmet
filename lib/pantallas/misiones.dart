@@ -15,6 +15,8 @@ class PantallaMisiones extends StatefulWidget {
 class _PantallaMisionesState extends State<PantallaMisiones> {
   bool _actualizando = false;
   bool _verHistorial = false;
+  String? _filtroProveedorMision;
+  String? _filtroMuebleMision;
   static const String kUbicacionTransito = 'EN TRÁNSITO';
 
   CollectionReference<Map<String, dynamic>> get _refInv =>
@@ -360,10 +362,21 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                   );
 
                   if (esPromocion) {
-                    batch.update(docInv.reference, {'enPromocion': true, 'piezasEnPromocion': cantATratar});
+                    batch.update(docInv.reference, {
+                      'enPromocion': true,
+                      'piezasEnPromocion': cantATratar,
+                      if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
+                      if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
+                      if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
+                    });
                   } else {
                     if (cantATratar == cantOriginal) batch.delete(docInv.reference);
-                    else batch.update(docInv.reference, {'cantidad': cantOriginal - cantATratar});
+                    else batch.update(docInv.reference, {
+                      'cantidad': cantOriginal - cantATratar,
+                      if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
+                      if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
+                      if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
+                    });
                   }
 
                   batch.update(docMision.reference, {
@@ -386,14 +399,13 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   }
 
   void _dialogoAuditoriaVenta(QueryDocumentSnapshot docMision, Map<String, dynamic> m) async {
-    int descontado = m['descontado'] ?? 1;
+    int pendientes = m['descontado'] ?? 1;
     String ubicacionOriginal = (m['ubicacion'] ?? 'PISO').toString();
     String sku = (m['sku'] ?? '').toString();
 
     var snapSku = await _refInv.where('sku', isEqualTo: sku).get();
     var docMismoLote = await _buscarLoteInventario(m);
 
-    // Filtrar otros lotes activos del mismo SKU en otras ubicaciones o fechas
     var otrosLotes = snapSku.docs.where((d) {
       if (docMismoLote != null && d.id == docMismoLote.id) return false;
       String u = (d.data()['ubicacion'] ?? '').toString();
@@ -401,6 +413,136 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
     }).toList();
 
     if (!mounted) return;
+
+    Future<void> abrirDescuentoPorUbicacion({
+      required BuildContext parentCtx,
+      required String nombreUbicacion,
+      required bool esUbicacionOriginalFIFO,
+      QueryDocumentSnapshot<Map<String, dynamic>>? docAlterno,
+    }) async {
+      int dispAlterno = docAlterno != null ? (docAlterno.data()['cantidad'] ?? 0) : pendientes;
+      int maxDescontar = esUbicacionOriginalFIFO
+          ? pendientes
+          : (dispAlterno < pendientes ? dispAlterno : pendientes);
+      if (maxDescontar <= 0) maxDescontar = pendientes;
+
+      TextEditingController cantCtrl = TextEditingController(text: '1');
+
+      Future<void> procesarDescuento(int cantElegida) async {
+        int cant = cantElegida.clamp(1, maxDescontar);
+        var batch = FirebaseFirestore.instance.batch();
+
+        if (!esUbicacionOriginalFIFO && docAlterno != null) {
+          // 1. Devolver esas piezas al lote FIFO original porque salieron de esta otra mesa
+          if (docMismoLote != null) {
+            int cantOrig = docMismoLote.data()['cantidad'] ?? 0;
+            batch.update(docMismoLote.reference, {'cantidad': cantOrig + cant});
+          } else {
+            batch.set(_refInv.doc(), {
+              'sku': sku,
+              'descripcion': m['descripcion'] ?? 'ND',
+              'ubicacion': ubicacionOriginal,
+              'cantidad': cant,
+              'fechaCaducidad': m['fechaCaducidad'],
+              'nombreProveedor': m['nombreProveedor'] ?? 'ND',
+              'nombreGpoArticulos': m['nombreGpoArticulos'] ?? 'SIN GRUPO',
+              'fechaCaptura': FieldValue.serverTimestamp(),
+              'capturista': widget.usuarioActual,
+            });
+          }
+
+          // 2. Descontar de la mesa seleccionada
+          if (dispAlterno <= cant) {
+            batch.delete(docAlterno.reference);
+          } else {
+            batch.update(docAlterno.reference, {'cantidad': dispAlterno - cant});
+          }
+        }
+
+        int restantes = pendientes - cant;
+        if (restantes <= 0) {
+          batch.update(docMision.reference, {
+            'estado': 'completada',
+            'completadaPor': widget.usuarioActual,
+            'ubicacion': esUbicacionOriginalFIFO ? ubicacionOriginal : '$nombreUbicacion (Validado en piso)',
+          });
+        } else {
+          batch.update(docMision.reference, {
+            'descontado': restantes,
+          });
+        }
+
+        await batch.commit();
+        if (mounted) {
+          Navigator.pop(parentCtx);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                restantes <= 0
+                    ? '✅ Venta validada en $nombreUbicacion. Misión completada.'
+                    : '✅ Se descontaron $cant pza(s) de $nombreUbicacion. Quedan $restantes pza(s) por descontar.',
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+
+      await showDialog(
+        context: parentCtx,
+        builder: (subCtx) => AlertDialog(
+          backgroundColor: const Color(0xFF262626),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.cyanAccent, width: 1.5)),
+          title: Text('📍 $nombreUbicacion', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Ventas pendientes por descontar: $pendientes pza(s)', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: cantCtrl,
+                keyboardType: TextInputType.number,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: 'Piezas a descontar aquí (Máx: $maxDescontar)',
+                  filled: true,
+                  fillColor: Colors.black45,
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(subCtx),
+              child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+            ),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.amberAccent, side: const BorderSide(color: Colors.amberAccent)),
+              onPressed: () {
+                int v = int.tryParse(cantCtrl.text.trim()) ?? 1;
+                Navigator.pop(subCtx);
+                procesarDescuento(v);
+              },
+              child: const Text('DESCONTAR CANTIDAD', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
+              onPressed: () {
+                Navigator.pop(subCtx);
+                procesarDescuento(maxDescontar);
+              },
+              child: Text('DESCONTAR TODO ($maxDescontar)', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    DateTime? cadOrig = (m['fechaCaducidad'] as Timestamp?)?.toDate();
+    String fOrig = cadOrig != null ? "${cadOrig.day}/${cadOrig.month}/${cadOrig.year}" : "ND";
+    int restOrig = docMismoLote != null ? (docMismoLote.data()['cantidad'] ?? 0) : 0;
 
     showDialog(
       context: context,
@@ -414,18 +556,39 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(m['descripcion'] ?? sku, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 13)),
+              const SizedBox(height: 2),
+              Text('SKU: $sku', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
               const SizedBox(height: 6),
               Text(
-                'SAP descontó $descontado pza(s) de $ubicacionOriginal (por ser el lote más próximo a vencer).',
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                'Pendiente por validar: $pendientes pza(s) vendida(s) en SAP.',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Mantén presionada (o toca) la ubicación de donde salió la mercancía para elegir cuántas piezas descontar:',
+                style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              // Tarjeta de la ubicación sugerida por FIFO
+              Card(
+                color: Colors.green.withOpacity(0.15),
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.greenAccent)),
+                child: ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.star, color: Colors.greenAccent, size: 20),
+                  title: Text('$ubicacionOriginal (Sugerido FIFO)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                  subtitle: Text('Cad: $fOrig • Restante en lote: $restOrig pzas', style: const TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                  trailing: const Icon(Icons.touch_app, size: 16, color: Colors.greenAccent),
+                  onTap: () => abrirDescuentoPorUbicacion(parentCtx: ctx, nombreUbicacion: ubicacionOriginal, esUbicacionOriginalFIFO: true),
+                  onLongPress: () => abrirDescuentoPorUbicacion(parentCtx: ctx, nombreUbicacion: ubicacionOriginal, esUbicacionOriginalFIFO: true),
+                ),
               ),
               if (otrosLotes.isNotEmpty) ...[
-                const Divider(color: Colors.white24, height: 20),
-                const Text(
-                  '🔀 Si el lote en este mueble sigue completo, selecciona de qué otra ubicación tomó el cliente el producto:',
-                  style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 11),
+                const Padding(
+                  padding: EdgeInsets.only(top: 8, bottom: 4),
+                  child: Text('Otras mesas / ubicaciones con este SKU:', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
                 ),
-                const SizedBox(height: 8),
                 ...otrosLotes.map((docAlt) {
                   var dAlt = docAlt.data();
                   String ubiAlt = (dAlt['ubicacion'] ?? 'ND').toString();
@@ -441,50 +604,19 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       leading: const Icon(Icons.swap_calls, color: Colors.cyanAccent, size: 20),
                       title: Text(ubiAlt, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
                       subtitle: Text('Cad: $fAlt • Disponible: $cantAlt pzas', style: const TextStyle(color: Colors.amberAccent, fontSize: 11)),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.cyanAccent),
-                      onTap: () async {
-                        Navigator.pop(ctx);
-                        var batch = FirebaseFirestore.instance.batch();
-
-                        // 1. Devolver las piezas al lote FIFO original que sigue intacto
-                        if (docMismoLote != null) {
-                          int cantOrig = docMismoLote.data()['cantidad'] ?? 0;
-                          batch.update(docMismoLote.reference, {'cantidad': cantOrig + descontado});
-                        } else {
-                          batch.set(_refInv.doc(), {
-                            'sku': sku,
-                            'descripcion': m['descripcion'] ?? 'ND',
-                            'ubicacion': ubicacionOriginal,
-                            'cantidad': descontado,
-                            'fechaCaducidad': m['fechaCaducidad'],
-                            'nombreProveedor': m['nombreProveedor'] ?? 'ND',
-                            'nombreGpoArticulos': m['nombreGpoArticulos'] ?? 'SIN GRUPO',
-                            'fechaCaptura': FieldValue.serverTimestamp(),
-                            'capturista': widget.usuarioActual,
-                          });
-                        }
-
-                        // 2. Descontar las piezas de la ubicación alterna real
-                        if (cantAlt <= descontado) {
-                          batch.delete(docAlt.reference);
-                        } else {
-                          batch.update(docAlt.reference, {'cantidad': cantAlt - descontado});
-                        }
-
-                        // 3. Cerrar misión dejando rastro del cambio de ubicación
-                        batch.update(docMision.reference, {
-                          'estado': 'completada',
-                          'completadaPor': widget.usuarioActual,
-                          'ubicacion': '$ubiAlt (Reasignado desde $ubicacionOriginal)',
-                        });
-
-                        await batch.commit();
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('🔀 Venta reasignada a $ubiAlt y lote restaurado en $ubicacionOriginal'), backgroundColor: Colors.cyan.shade700),
-                          );
-                        }
-                      },
+                      trailing: const Icon(Icons.touch_app, size: 16, color: Colors.cyanAccent),
+                      onTap: () => abrirDescuentoPorUbicacion(
+                        parentCtx: ctx,
+                        nombreUbicacion: ubiAlt,
+                        esUbicacionOriginalFIFO: false,
+                        docAlterno: docAlt,
+                      ),
+                      onLongPress: () => abrirDescuentoPorUbicacion(
+                        parentCtx: ctx,
+                        nombreUbicacion: ubiAlt,
+                        esUbicacionOriginalFIFO: false,
+                        docAlterno: docAlt,
+                      ),
                     ),
                   );
                 }),
@@ -493,38 +625,9 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR', style: TextStyle(color: Colors.white54))),
-          OutlinedButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              var batch = FirebaseFirestore.instance.batch();
-              if (docMismoLote != null) {
-                batch.update(docMismoLote.reference, {'cantidad': (docMismoLote.data()['cantidad'] ?? 0) + descontado});
-              } else {
-                batch.set(_refInv.doc(), {
-                  'sku': sku,
-                  'descripcion': m['descripcion'] ?? 'ND',
-                  'ubicacion': ubicacionOriginal,
-                  'cantidad': descontado,
-                  'fechaCaducidad': m['fechaCaducidad'],
-                  'nombreProveedor': m['nombreProveedor'] ?? 'ND',
-                  'nombreGpoArticulos': m['nombreGpoArticulos'] ?? 'SIN GRUPO',
-                  'fechaCaptura': FieldValue.serverTimestamp(),
-                  'capturista': widget.usuarioActual,
-                });
-              }
-              batch.update(docMision.reference, {'estado': 'completada', 'completadaPor': widget.usuarioActual});
-              await batch.commit();
-            },
-            child: const Text('SOLO RESTAURAR AQUÍ', style: TextStyle(color: Colors.orangeAccent, fontSize: 11)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await docMision.reference.update({'estado': 'completada', 'completadaPor': widget.usuarioActual});
-            },
-            child: const Text('SÍ SALIÓ DE AQUÍ (OK)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CERRAR', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -558,6 +661,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
               'soloMermaODevolucion': true,
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': '🔥 REACTIVACIÓN 15 DÍAS: Lote en límite crítico. Proceder únicamente con Merma o Devolución',
@@ -574,6 +678,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': 'Verificar lote próximo a vencer (45 días)',
             });
@@ -591,6 +696,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               'nombreProveedor': data['nombreProveedor'] ?? 'ND',
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
+              if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': '🚨 POLÍTICA 90 DÍAS: Extraer de Bodega y reubicar en Piso/Display',
             });
@@ -661,7 +767,28 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
 
                   String estadoBuscado = _verHistorial ? 'completada' : 'pendiente';
-                  var lista = snapshot.data!.docs.where((doc) => (doc.data() as Map<String, dynamic>)['estado'] == estadoBuscado).toList();
+                  var baseDocs = snapshot.data!.docs.where((doc) => (doc.data() as Map<String, dynamic>)['estado'] == estadoBuscado).toList();
+
+                  var provsDisponibles = baseDocs
+                      .map((d) => ((d.data() as Map<String, dynamic>)['nombreProveedor'] ?? 'ND').toString())
+                      .toSet()
+                      .toList()
+                    ..sort();
+
+                  var mueblesDisponibles = baseDocs
+                      .map((d) => ((d.data() as Map<String, dynamic>)['ubicacion'] ?? 'ND').toString())
+                      .toSet()
+                      .toList()
+                    ..sort();
+
+                  var lista = baseDocs.where((doc) {
+                    var d = doc.data() as Map<String, dynamic>;
+                    String p = (d['nombreProveedor'] ?? 'ND').toString();
+                    String u = (d['ubicacion'] ?? 'ND').toString();
+                    bool okProv = _filtroProveedorMision == null || p == _filtroProveedorMision;
+                    bool okMueble = _filtroMuebleMision == null || u == _filtroMuebleMision;
+                    return okProv && okMueble;
+                  }).toList();
 
                   if (lista.isEmpty) {
                     return Center(
@@ -686,9 +813,70 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                     return tB.compareTo(tA);
                   });
 
-                  return ListView.builder(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    itemCount: lista.length,
+                  return Column(
+                    children: [
+                      Container(
+                        color: Colors.black,
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                height: 38,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: provsDisponibles.contains(_filtroProveedorMision) ? _filtroProveedorMision : null,
+                                    hint: const Text('Filtro Proveedor', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Proveedor: Todos', style: TextStyle(fontSize: 11, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                      ...provsDisponibles.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroProveedorMision = v),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Container(
+                                height: 38,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: mueblesDisponibles.contains(_filtroMuebleMision) ? _filtroMuebleMision : null,
+                                    hint: const Text('Filtro Mueble', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Mueble: Todos', style: TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold))),
+                                      ...mueblesDisponibles.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroMuebleMision = v),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_filtroProveedorMision != null || _filtroMuebleMision != null)
+                              IconButton(
+                                icon: const Icon(Icons.filter_alt_off, color: Colors.redAccent, size: 18),
+                                tooltip: 'Limpiar filtros',
+                                onPressed: () => setState(() {
+                                  _filtroProveedorMision = null;
+                                  _filtroMuebleMision = null;
+                                }),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          itemCount: lista.length,
                     itemBuilder: (context, i) {
                       var docMision = lista[i];
                       var m = docMision.data() as Map<String, dynamic>;
@@ -712,7 +900,13 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                               contentPadding: const EdgeInsets.all(12),
                               onTap: _verHistorial ? () => _dialogoDeshacerMision(docMision) : () => _ejecutarAccionMision(docMision, prioridad),
                               onLongPress: _verHistorial ? () => _dialogoDeshacerMision(docMision) : () => _ejecutarAccionMision(docMision, prioridad),
-                              title: Text(m['descripcion'] ?? m['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              title: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(m['descripcion'] ?? m['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                  Text('SKU: ${m['sku'] ?? 'ND'} • Prov: ${m['nombreProveedor'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                                ],
+                              ),
                               subtitle: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -721,6 +915,11 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                   if (m['otrasUbicaciones'] != null && (m['otrasUbicaciones'] as List).isNotEmpty)
                                     Text('🔀 También en: ${(m['otrasUbicaciones'] as List).join(', ')}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                                   if (cad != null) Text('📅 Caducidad: ${cad.day}/${cad.month}/${cad.year}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                  if (m['comentarioCorporativo'] != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 3, bottom: 2),
+                                      child: Text('🏢 INSTRUCCIÓN CORP: ${m['comentarioCorporativo']}', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    ),
                                   if (m['mensaje'] != null) Text(m['mensaje'], style: TextStyle(color: borderColor, fontSize: 11, fontStyle: FontStyle.italic)),
                                   if (_verHistorial && m['completadaPor'] != null) Text('👤 Cerrada por: ${m['completadaPor']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
                                 ],
@@ -741,9 +940,12 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                         ),
                       );
                     },
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
             ),
           ),
         ],

@@ -114,6 +114,78 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
 
     if (codigoLimpio.startsWith('LOC:')) {
       String muebleEscaneado = codigoLimpio.substring(4);
+      var ubiSnap = await _refUbi.orderBy('nombre').get();
+      List<String> todasUbis = ubiSnap.docs.map((d) => d['nombre'].toString()).toList();
+      // Buscar si este QR tiene sub-niveles hijos (hojas finales)
+      List<String> subRamas = todasUbis.where((u) => u.startsWith('$muebleEscaneado > ')).toList();
+      List<String> hojas = subRamas.where((u) => !todasUbis.any((otra) => otra.startsWith('$u > '))).toList();
+
+      if (hojas.isNotEmpty) {
+        String? subElegida = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 2)),
+            title: Text('📍 ${muebleEscaneado.replaceAll(' > ', ' ➔ ')}', style: const TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold)),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Selecciona el nivel / entrepaño exacto donde estás trabajando:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 10),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: hojas.length,
+                      itemBuilder: (c, idx) {
+                        String h = hojas[idx];
+                        String etiquetaHija = h.substring(muebleEscaneado.length + 3).replaceAll(' > ', ' ➔ ');
+                        return Card(
+                          color: Colors.white10,
+                          margin: const EdgeInsets.symmetric(vertical: 3),
+                          child: ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.subdirectory_arrow_right, color: Colors.greenAccent, size: 18),
+                            title: Text(etiquetaHija, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                            trailing: const Icon(Icons.arrow_forward_ios, size: 13, color: Colors.amber),
+                            onTap: () => Navigator.pop(ctx, h),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+                icon: const Icon(Icons.outbox, size: 16),
+                label: const Text('EXTRAER DE TODO EL MUEBLE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                onPressed: () => Navigator.pop(ctx, '__EXTRAER_PADRE__'),
+              ),
+            ],
+          ),
+        );
+
+        if (subElegida == null) {
+          if (mounted) setState(() => _bloquearEscaneo = false);
+          return;
+        } else if (subElegida == '__EXTRAER_PADRE__') {
+          await _irATrasvaseMasivo(ubicacionInicial: muebleEscaneado);
+          if (mounted) setState(() => _bloquearEscaneo = false);
+          return;
+        } else {
+          muebleEscaneado = subElegida;
+        }
+      }
+
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -572,7 +644,8 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
               stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const LinearProgressIndicator();
-                List<String> listaMuebles = snapshot.data!.docs.map((d) => d['nombre'] as String).where((n) => n != 'EN TRÁNSITO').toList();
+                List<String> todas = snapshot.data!.docs.map((d) => d['nombre'] as String).where((n) => n != 'EN TRÁNSITO').toList();
+                List<String> listaMuebles = todas.where((u) => !todas.any((otra) => otra.startsWith('$u > '))).toList();
                 if (_ubicacionSeleccionada != null && !listaMuebles.contains(_ubicacionSeleccionada)) listaMuebles.add(_ubicacionSeleccionada!);
                 return Container(
                   height: 56,

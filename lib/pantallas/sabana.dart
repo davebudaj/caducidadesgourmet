@@ -22,9 +22,17 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String? _filtroGrupo;
   String? _filtroRiesgoEspecial;
   String? _filtroTipoUbicacion;
-  String? _filtroMueble; 
+  String? _filtroMueble;
+  int? _filtroMes = DateTime.now().month;
+
+  static const Map<int, String> _nombresMeses = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+  }; 
   
   bool _modoSeleccion = false;
+  bool _filtroDescuadreSAP = false;
   Set<String> _seleccionados = {};
   
   late Stream<QuerySnapshot> _inventarioStream; 
@@ -51,7 +59,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   void aplicarFiltroEspecial(String riesgo) {
     setState(() {
       _filtroRiesgoEspecial = riesgo;
-      _filtroProveedor = null; 
+      _filtroProveedor = null;
+      _filtroMes = null;
+      _filtroDescuadreSAP = false; 
       _filtroGrupo = null;
     });
   }
@@ -155,6 +165,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       if (motivoSeleccionado == 'Saldado / Promoción') {
                         batch.update(docRef, {
                           'enPromocion': true,
+                          if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
+                          if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
+                          if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
                           'piezasEnPromocion': cant,
                           'fechaPromocion': FieldValue.serverTimestamp(),
                         });
@@ -304,13 +317,21 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                        if (motivoSeleccionado == 'Saldado / Promoción') {
                          await docSnap.reference.update({
                            'enPromocion': true,
+                          if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
+                          if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
+                          if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
                            'piezasEnPromocion': cantATratar,
                            'fechaPromocion': FieldValue.serverTimestamp(),
                          });
                        } else if (cantATratar == cantOriginal) {
                          await docSnap.reference.delete();
                        } else {
-                         await docSnap.reference.update({'cantidad': cantOriginal - cantATratar});
+                         await docSnap.reference.update({
+                           'cantidad': cantOriginal - cantATratar,
+                           if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
+                           if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
+                           if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
+                         });
                        }
 
                        if (mounted) {
@@ -634,12 +655,32 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           
           var provs = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreProveedor']?.toString() ?? 'ND').toSet().toList()..sort();
           var grupos = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreGpoArticulos']?.toString() ?? 'ND').toSet().toList()..sort();
-          var mueblesDisponibles = snapshot.data!.docs
-              .map((doc) => (doc.data() as Map)['ubicacion']?.toString() ?? 'ND')
-              .where((u) => _filtroTipoUbicacion == null || u.toUpperCase().contains(_filtroTipoUbicacion!))
-              .toSet()
-              .toList()
-            ..sort();
+          Set<String> conjuntoMueblesYRamas = {};
+          for (var doc in snapshot.data!.docs) {
+            String u = ((doc.data() as Map)['ubicacion']?.toString() ?? 'ND');
+            if (_filtroTipoUbicacion == null || u.toUpperCase().contains(_filtroTipoUbicacion!)) {
+              conjuntoMueblesYRamas.add(u);
+              if (u.contains(' > ')) {
+                List<String> p = u.split(' > ');
+                String acum = p[0];
+                for (int k = 1; k < p.length - 1; k++) {
+                  acum = '$acum > ${p[k]}';
+                  conjuntoMueblesYRamas.add(acum);
+                }
+              }
+            }
+          }
+          var mueblesDisponibles = conjuntoMueblesYRamas.toList()..sort();
+
+          Map<String, int> sumaFisicaPorSku = {};
+          for (var doc in snapshot.data!.docs) {
+            var dMap = doc.data() as Map<String, dynamic>;
+            String s = (dMap['sku'] ?? '').toString();
+            int c = (dMap['cantidad'] ?? 0) as int;
+            if (s.isNotEmpty) {
+              sumaFisicaPorSku[s] = (sumaFisicaPorSku[s] ?? 0) + c;
+            }
+          }
 
           var docsFiltrados = snapshot.data!.docs.where((doc) {
             var data = doc.data() as Map<String, dynamic>;
@@ -666,8 +707,16 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             }
             
             bool coincideTipoUbi = _filtroTipoUbicacion == null || ubi.toUpperCase().contains(_filtroTipoUbicacion!);
-            bool coincideMueble = _filtroMueble == null || ubi == _filtroMueble;
-            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble;
+            bool coincideMueble = _filtroMueble == null || ubi == _filtroMueble || ubi.startsWith('${_filtroMueble!} > ');
+            bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
+            bool coincideDescuadre = true;
+            if (_filtroDescuadreSAP) {
+              String skuRaw = (data['sku'] ?? '').toString();
+              int totalFisico = sumaFisicaPorSku[skuRaw] ?? 0;
+              int ohSap = int.tryParse((data['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
+              coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
+            }
+            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideMes && coincideDescuadre;
           }).toList();
 
           var docsFinales = docsFiltrados.take(100).toList();
@@ -697,6 +746,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                _filtroRiesgoEspecial = null;
       _filtroTipoUbicacion = null;
       _filtroMueble = null;
+      _filtroMes = null;
+      _filtroDescuadreSAP = false;
                              });
                           }
                         ),
@@ -711,6 +762,19 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                           icon: const Icon(Icons.date_range, size: 16),
                           label: const Text('CSV Próx. Mes', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                           onPressed: () => _descargarProximoMes(snapshot.data!.docs),
+                        ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _filtroDescuadreSAP ? Colors.redAccent : Colors.white10,
+                            foregroundColor: Colors.white,
+                            side: BorderSide(color: _filtroDescuadreSAP ? Colors.amberAccent : Colors.redAccent),
+                          ),
+                          icon: const Icon(Icons.compare_arrows, size: 16),
+                          label: Text(_filtroDescuadreSAP ? 'Viendo Descuadre SAP' : 'Descuadre vs SAP', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onPressed: () => setState(() {
+                            _filtroDescuadreSAP = !_filtroDescuadreSAP;
+                            if (_filtroDescuadreSAP) _filtroMes = null;
+                          }),
                         ),
                       ],
                     ),
@@ -849,6 +913,42 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             ],
                           ),
                         ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro Mes', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 40,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<int?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroMes,
+                                    hint: const Text('Filtro Mes', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem<int?>(
+                                        value: null,
+                                        child: Text('Mes: Todos (Top 100)', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                      ),
+                                      ..._nombresMeses.entries.map((e) => DropdownMenuItem<int?>(
+                                            value: e.key,
+                                            child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 12)),
+                                          )),
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroMes = v),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                         if (_filtroTipoUbicacion != null) ...[
                           const SizedBox(width: 10),
                           Expanded(
@@ -945,10 +1045,27 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                         padding: const EdgeInsets.only(top: 4),
                                         child: Text('🏷️ EN PROMOCIÓN / SALDADO (${d['piezasEnPromocion'] ?? d['cantidad']} pzas) - Pendiente venta o baja', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
                                       ),
+                                    if (_filtroDescuadreSAP)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          '📊 Físico Tienda: ${sumaFisicaPorSku[(d['sku'] ?? '').toString()] ?? d['cantidad']} pzas  vs  SAP (OH): ${d['oh'] ?? 0} pzas',
+                                          style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
                                     if (d['comentarioCorporativo'] != null)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),
-                                        child: Text('INSTRUCCIÓN: ${d['comentarioCorporativo']}', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                        child: Text(
+                                          d['instruccionCorpEjecutada'] == true
+                                              ? '✅ CORP EJECUTADO (${d['motivoEjecucionCorp'] ?? 'Atendido'}): ${d['comentarioCorporativo']}'
+                                              : 'INSTRUCCIÓN: ${d['comentarioCorporativo']}',
+                                          style: TextStyle(
+                                            color: d['instruccionCorpEjecutada'] == true ? Colors.greenAccent : Colors.pinkAccent,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
                                       )
                                   ],
                                 ),

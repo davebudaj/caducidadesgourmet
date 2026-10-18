@@ -36,6 +36,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   late DocumentReference _refTienda;
   String _ultimaActualizacion = "Buscando...";
   String _ultimoBackup = "Sin respaldo reciente";
+  final Set<String> _ramasContraidas = {};
 
   @override
   void initState() {
@@ -339,7 +340,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
           children: [
             const Text('El Catálogo Maestro Zonal ya fue cargado el día de hoy en esta tienda.', style: TextStyle(color: Colors.white70, fontSize: 13)),
             const SizedBox(height: 12),
-            const Text('Para realizar una recarga el mismo día, ingresa la clave maestra ADMIN777:', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
+            const Text('Para realizar una recarga el mismo día, ingresa la clave maestra de autorización:', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
             const SizedBox(height: 8),
             TextField(
               controller: passCtrl,
@@ -372,6 +373,102 @@ class _PantallaAdminState extends State<PantallaAdmin> {
       ),
     );
     return autorizado;
+  }
+
+  void _agregarSubRamaDialog(String rutaPadre, List<String> existentes) {
+    final TextEditingController subCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.greenAccent, width: 1.5)),
+        title: const Text('🌿 Agregar Sub-nivel / Rama', style: TextStyle(color: Colors.greenAccent, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Dentro de: $rutaPadre', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('Puedes escribir uno o varios separados por coma (,):', style: TextStyle(color: Colors.white70, fontSize: 11)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: subCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Ej. CARA 1, CARA 2  o  ENTREPAÑO 1, ENTREPAÑO 2',
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
+            icon: const Icon(Icons.account_tree, size: 18),
+            label: const Text('CREAR RAMA(S)', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              String raw = subCtrl.text.trim().toUpperCase();
+              if (raw.isEmpty) return;
+              Navigator.pop(ctx);
+
+              List<String> partes = raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+              var batch = FirebaseFirestore.instance.batch();
+              int creados = 0;
+
+              for (String p in partes) {
+                String nuevaRuta = '$rutaPadre > $p';
+                if (!existentes.contains(nuevaRuta)) {
+                  batch.set(_refTienda.collection('ubicaciones').doc(), {'nombre': nuevaRuta});
+                  creados++;
+                }
+              }
+              if (creados > 0) {
+                await batch.commit();
+                setState(() => _ramasContraidas.remove(rutaPadre));
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmarEliminarRama(QueryDocumentSnapshot docActual, List<QueryDocumentSnapshot> todosDocs) {
+    String ruta = docActual['nombre'].toString();
+    var subRamas = todosDocs.where((d) => d['nombre'].toString().startsWith('$ruta > ')).toList();
+
+    if (subRamas.isEmpty) {
+      docActual.reference.delete();
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('¿Eliminar Ubicación y Sub-niveles?', style: TextStyle(color: Colors.redAccent, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Text('"$ruta" tiene ${subRamas.length} sub-nivel(es) adentro.\n\n¿Deseas eliminar toda la rama completa? (Los productos en inventario no se borrarán).', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              var batch = FirebaseFirestore.instance.batch();
+              batch.delete(docActual.reference);
+              for (var sub in subRamas) {
+                batch.delete(sub.reference);
+              }
+              await batch.commit();
+            },
+            child: const Text('ELIMINAR RAMA COMPLETA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _mostrarYDescargarQR(String nombreMueble) {
@@ -599,6 +696,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                     'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
                     'nombreProveedor': data['nombreProveedor'] ?? 'ND', 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
                     'otrasUbicaciones': otrasUbis,
+                    if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
                     'fechaGeneracion': FieldValue.serverTimestamp(),
                   });
                   misionesNuevas++;
@@ -702,60 +800,207 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
               
-              const Text('Gestión de Ubicaciones (Muebles de esta tienda)', style: TextStyle(fontSize: 18, color: Colors.amber)),
-              const SizedBox(height: 15),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Expanded(
+                    child: Text('Arquitectura de Ubicaciones (Árbol de Muebles)', style: TextStyle(fontSize: 16, color: Colors.amber, fontWeight: FontWeight.bold)),
+                  ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.unfold_less, color: Colors.cyanAccent, size: 16),
+                    label: const Text('Contraer/Expandir', style: TextStyle(color: Colors.cyanAccent, fontSize: 11)),
+                    onPressed: () {
+                      setState(() {
+                        if (_ramasContraidas.isNotEmpty) {
+                          _ramasContraidas.clear();
+                        } else {
+                          _ramasContraidas.addAll(['ROOT_PISO', 'ROOT_BODEGA', 'ROOT_DISPLAY']);
+                        }
+                      });
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Crea un mueble base y toca el botón [+] verde de cualquier fila para ramificar (Caras, Niveles, Entrepaños, Divisiones). Puedes separar varios con comas (,).',
+                style: TextStyle(color: Colors.white54, fontSize: 11),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
               Row(children: [
                 Container(
-                  height: 55, padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
+                  height: 52,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber.withOpacity(0.4))),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       dropdownColor: const Color(0xFF2C2C2C),
                       value: _prefijoMueble,
-                      items: ['PISO', 'BODEGA', 'DISPLAY'].map((String val) => DropdownMenuItem(value: val, child: Text(val, style: const TextStyle(fontWeight: FontWeight.bold)))).toList(),
+                      items: ['PISO', 'BODEGA', 'DISPLAY'].map((String val) => DropdownMenuItem(value: val, child: Text(val, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber)))).toList(),
                       onChanged: (val) => setState(() => _prefijoMueble = val!),
                     ),
                   ),
                 ),
                 const SizedBox(width: 10),
-                Expanded(child: TextField(controller: _muebleController, decoration: InputDecoration(hintText: 'Ej. MESA DE TE', filled: true, fillColor: Colors.white10, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)))),
+                Expanded(
+                  child: TextField(
+                    controller: _muebleController,
+                    decoration: InputDecoration(
+                      hintText: 'Ej. MESA TE, GONDOLA 1 (separa con coma)',
+                      filled: true,
+                      fillColor: Colors.white10,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 10),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), 
-                  onPressed: () async { 
-                    if (_muebleController.text.isNotEmpty) { 
-                      String nombreFinal = '$_prefijoMueble ${_muebleController.text.trim().toUpperCase()}';
-                      await _refTienda.collection('ubicaciones').add({'nombre': nombreFinal}); 
-                      _muebleController.clear(); 
-                    } 
-                  }, 
-                  child: const Icon(Icons.add)
-                )
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.greenAccent,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () async {
+                    if (_muebleController.text.trim().isNotEmpty) {
+                      List<String> nuevos = _muebleController.text.toUpperCase().split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+                      var batch = FirebaseFirestore.instance.batch();
+                      for (String n in nuevos) {
+                        String nombreFinal = '$_prefijoMueble > $n';
+                        batch.set(_refTienda.collection('ubicaciones').doc(), {'nombre': nombreFinal});
+                      }
+                      await batch.commit();
+                      _muebleController.clear();
+                    }
+                  },
+                  child: const Icon(Icons.add),
+                ),
               ]),
               const SizedBox(height: 15),
               Container(
-                height: 200, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
+                height: 360,
+                decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white12)),
                 child: StreamBuilder<QuerySnapshot>(
                   stream: _refTienda.collection('ubicaciones').orderBy('nombre').snapshots(),
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                    var docs = snapshot.data!.docs;
+                    List<String> todasRutas = docs.map((d) => d['nombre'].toString()).toList();
+
+                    // Filtrar nodos cuyos padres estén contraídos
+                    var docsVisibles = docs.where((doc) {
+                      String ruta = doc['nombre'].toString();
+                      String upper = ruta.toUpperCase();
+                      if (upper.startsWith('PISO') && _ramasContraidas.contains('ROOT_PISO')) return false;
+                      if (upper.startsWith('BODEGA') && _ramasContraidas.contains('ROOT_BODEGA')) return false;
+                      if (upper.startsWith('DISPLAY') && _ramasContraidas.contains('ROOT_DISPLAY')) return false;
+
+                      for (String contraida in _ramasContraidas) {
+                        if (ruta.startsWith('$contraida > ')) return false;
+                      }
+                      return true;
+                    }).toList();
+
+                    if (docs.isEmpty) {
+                      return const Center(child: Text('Aún no hay muebles registrados en esta tienda.', style: TextStyle(color: Colors.white54)));
+                    }
+
                     return ListView.builder(
-                      itemCount: snapshot.data!.docs.length,
+                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                      itemCount: docsVisibles.length,
                       itemBuilder: (context, index) {
-                        var doc = snapshot.data!.docs[index];
-                        return ListTile(
-                          title: Text(doc['nombre'], style: const TextStyle(fontWeight: FontWeight.w500)),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(icon: const Icon(Icons.qr_code, color: Colors.blueAccent), onPressed: () => _mostrarYDescargarQR(doc['nombre'])),
-                              IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => doc.reference.delete()),
-                            ],
+                        var doc = docsVisibles[index];
+                        String ruta = doc['nombre'].toString();
+                        List<String> niveles = ruta.contains(' > ') ? ruta.split(' > ') : [ruta];
+                        int profundidad = niveles.length >= 2 ? (niveles.length - 2) : 0;
+                        String nombreCorto = niveles.last;
+                        String areaRaiz = niveles.first.toUpperCase();
+
+                        bool tieneHijos = todasRutas.any((r) => r.startsWith('$ruta > '));
+                        bool estaContraido = _ramasContraidas.contains(ruta);
+
+                        Color colorRaiz = Colors.amber;
+                        IconData iconoRaiz = Icons.storefront;
+                        if (areaRaiz.contains('BODEGA')) {
+                          colorRaiz = Colors.pinkAccent;
+                          iconoRaiz = Icons.inventory_2;
+                        } else if (areaRaiz.contains('DISPLAY')) {
+                          colorRaiz = Colors.cyanAccent;
+                          iconoRaiz = Icons.auto_awesome;
+                        }
+
+                        return Container(
+                          margin: EdgeInsets.only(left: (profundidad * 18.0).clamp(0.0, 90.0), top: 3, bottom: 3),
+                          decoration: BoxDecoration(
+                            color: tieneHijos ? Colors.white.withOpacity(0.07) : Colors.white.withOpacity(0.03),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border(left: BorderSide(color: colorRaiz, width: tieneHijos ? 3.5 : 1.5)),
+                          ),
+                          child: ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                            leading: InkWell(
+                              onTap: tieneHijos
+                                  ? () {
+                                      setState(() {
+                                        if (estaContraido) {
+                                          _ramasContraidas.remove(ruta);
+                                        } else {
+                                          _ramasContraidas.add(ruta);
+                                        }
+                                      });
+                                    }
+                                  : null,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (tieneHijos)
+                                    Icon(estaContraido ? Icons.chevron_right : Icons.expand_more, color: Colors.amber, size: 20)
+                                  else
+                                    const SizedBox(width: 20),
+                                  Icon(profundidad == 0 ? iconoRaiz : Icons.subdirectory_arrow_right, color: colorRaiz, size: 18),
+                                ],
+                              ),
+                            ),
+                            title: Text(
+                              nombreCorto,
+                              style: TextStyle(
+                                fontWeight: tieneHijos ? FontWeight.bold : FontWeight.w500,
+                                fontSize: 13,
+                                color: tieneHijos ? Colors.white : Colors.white70,
+                              ),
+                            ),
+                            subtitle: Text(
+                              ruta.replaceAll(' > ', ' ➔ '),
+                              style: TextStyle(fontSize: 10, color: colorRaiz.withOpacity(0.8)),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 20),
+                                  tooltip: 'Agregar Sub-nivel (Cara, Nivel, Entrepaño...)',
+                                  onPressed: () => _agregarSubRamaDialog(ruta, todasRutas),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.qr_code, color: Colors.blueAccent, size: 20),
+                                  tooltip: 'Descargar QR de esta ubicación',
+                                  onPressed: () => _mostrarYDescargarQR(ruta),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                  tooltip: 'Eliminar ubicación',
+                                  onPressed: () => _confirmarEliminarRama(doc, docs),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },
                     );
-                  }
+                  },
                 ),
               ),
 
@@ -763,7 +1008,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
 
-              Text('Gestión de Usuarios (${widget.nombreTienda})', style: const TextStyle(fontSize: 18, color: Colors.amber)),
+                            Text('Gestión de Usuarios (${widget.nombreTienda})', style: const TextStyle(fontSize: 18, color: Colors.amber)),
               const SizedBox(height: 15),
               Row(
                 children: [
