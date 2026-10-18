@@ -336,16 +336,16 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text('El Catálogo Maestro Zonal ya fue cargado el día de hoy en esta tienda.', style: TextStyle(color: Colors.white70, fontSize: 13)),
-            SizedBox(height: 12),
-            Text('Para realizar una recarga el mismo día, ingresa la clave maestra ADMIN777:', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
-            SizedBox(height: 8),
+          children: [
+            const Text('El Catálogo Maestro Zonal ya fue cargado el día de hoy en esta tienda.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+            const SizedBox(height: 12),
+            const Text('Para realizar una recarga el mismo día, ingresa la clave maestra ADMIN777:', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
+            const SizedBox(height: 8),
             TextField(
               controller: passCtrl,
               obscureText: true,
               autofocus: true,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'Clave Maestra',
                 filled: true,
                 fillColor: Colors.white10,
@@ -415,11 +415,11 @@ class _PantallaAdminState extends State<PantallaAdmin> {
           DateTime ahora = DateTime.now();
           if (ultimaFecha.year == ahora.year && ultimaFecha.month == ahora.month && ultimaFecha.day == ahora.day) {
             bool ok = await _verificarPermisoAdminCatalogo();
+            if (ok == false) return;
           }
         }
       }
     } catch (_) {}
-
     try {
       FilePickerResult? resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'CSV']);
       if (resultado != null && resultado.files.single.bytes != null) {
@@ -589,10 +589,16 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                   });
                   misionesActualizadas++;
               } else {
+                  List<String> otrasUbis = docsOrdenados
+                      .map((d) => ((d.data() as Map<String, dynamic>)['ubicacion'] ?? '').toString())
+                      .where((u) => u.isNotEmpty && u != (data['ubicacion'] ?? ''))
+                      .toSet()
+                      .toList();
                   await _refTienda.collection('misiones_auditoria').add({
                     'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
                     'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
                     'nombreProveedor': data['nombreProveedor'] ?? 'ND', 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                    'otrasUbicaciones': otrasUbis,
                     'fechaGeneracion': FieldValue.serverTimestamp(),
                   });
                   misionesNuevas++;

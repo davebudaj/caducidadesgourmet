@@ -385,30 +385,126 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
     );
   }
 
-  void _dialogoAuditoriaVenta(QueryDocumentSnapshot docMision, Map<String, dynamic> m) {
+  void _dialogoAuditoriaVenta(QueryDocumentSnapshot docMision, Map<String, dynamic> m) async {
     int descontado = m['descontado'] ?? 1;
-    String ubicacion = (m['ubicacion'] ?? 'PISO').toString();
+    String ubicacionOriginal = (m['ubicacion'] ?? 'PISO').toString();
+    String sku = (m['sku'] ?? '').toString();
+
+    var snapSku = await _refInv.where('sku', isEqualTo: sku).get();
+    var docMismoLote = await _buscarLoteInventario(m);
+
+    // Filtrar otros lotes activos del mismo SKU en otras ubicaciones o fechas
+    var otrosLotes = snapSku.docs.where((d) {
+      if (docMismoLote != null && d.id == docMismoLote.id) return false;
+      String u = (d.data()['ubicacion'] ?? '').toString();
+      return u != kUbicacionTransito;
+    }).toList();
+
+    if (!mounted) return;
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.blueAccent, width: 2)),
         title: const Text('🛒 Auditoría Física de Venta', style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 16)),
-        content: Text('SAP descontó $descontado pza(s) en $ubicacion.\n¿Confirmas que el lote físico coincide o deseas restaurar las piezas?', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(m['descripcion'] ?? sku, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 13)),
+              const SizedBox(height: 6),
+              Text(
+                'SAP descontó $descontado pza(s) de $ubicacionOriginal (por ser el lote más próximo a vencer).',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              if (otrosLotes.isNotEmpty) ...[
+                const Divider(color: Colors.white24, height: 20),
+                const Text(
+                  '🔀 Si el lote en este mueble sigue completo, selecciona de qué otra ubicación tomó el cliente el producto:',
+                  style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 11),
+                ),
+                const SizedBox(height: 8),
+                ...otrosLotes.map((docAlt) {
+                  var dAlt = docAlt.data();
+                  String ubiAlt = (dAlt['ubicacion'] ?? 'ND').toString();
+                  int cantAlt = dAlt['cantidad'] ?? 0;
+                  DateTime cadAlt = (dAlt['fechaCaducidad'] as Timestamp).toDate();
+                  String fAlt = "${cadAlt.day}/${cadAlt.month}/${cadAlt.year}";
+
+                  return Card(
+                    color: Colors.white10,
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    child: ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.swap_calls, color: Colors.cyanAccent, size: 20),
+                      title: Text(ubiAlt, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                      subtitle: Text('Cad: $fAlt • Disponible: $cantAlt pzas', style: const TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.cyanAccent),
+                      onTap: () async {
+                        Navigator.pop(ctx);
+                        var batch = FirebaseFirestore.instance.batch();
+
+                        // 1. Devolver las piezas al lote FIFO original que sigue intacto
+                        if (docMismoLote != null) {
+                          int cantOrig = docMismoLote.data()['cantidad'] ?? 0;
+                          batch.update(docMismoLote.reference, {'cantidad': cantOrig + descontado});
+                        } else {
+                          batch.set(_refInv.doc(), {
+                            'sku': sku,
+                            'descripcion': m['descripcion'] ?? 'ND',
+                            'ubicacion': ubicacionOriginal,
+                            'cantidad': descontado,
+                            'fechaCaducidad': m['fechaCaducidad'],
+                            'nombreProveedor': m['nombreProveedor'] ?? 'ND',
+                            'nombreGpoArticulos': m['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                            'fechaCaptura': FieldValue.serverTimestamp(),
+                            'capturista': widget.usuarioActual,
+                          });
+                        }
+
+                        // 2. Descontar las piezas de la ubicación alterna real
+                        if (cantAlt <= descontado) {
+                          batch.delete(docAlt.reference);
+                        } else {
+                          batch.update(docAlt.reference, {'cantidad': cantAlt - descontado});
+                        }
+
+                        // 3. Cerrar misión dejando rastro del cambio de ubicación
+                        batch.update(docMision.reference, {
+                          'estado': 'completada',
+                          'completadaPor': widget.usuarioActual,
+                          'ubicacion': '$ubiAlt (Reasignado desde $ubicacionOriginal)',
+                        });
+
+                        await batch.commit();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('🔀 Venta reasignada a $ubiAlt y lote restaurado en $ubicacionOriginal'), backgroundColor: Colors.cyan.shade700),
+                          );
+                        }
+                      },
+                    ),
+                  );
+                }),
+              ],
+            ],
+          ),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR', style: TextStyle(color: Colors.white54))),
           OutlinedButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              var docInv = await _buscarLoteInventario(m);
               var batch = FirebaseFirestore.instance.batch();
-              if (docInv != null) {
-                batch.update(docInv.reference, {'cantidad': (docInv.data()['cantidad'] ?? 0) + descontado});
+              if (docMismoLote != null) {
+                batch.update(docMismoLote.reference, {'cantidad': (docMismoLote.data()['cantidad'] ?? 0) + descontado});
               } else {
                 batch.set(_refInv.doc(), {
-                  'sku': m['sku'],
+                  'sku': sku,
                   'descripcion': m['descripcion'] ?? 'ND',
-                  'ubicacion': ubicacion,
+                  'ubicacion': ubicacionOriginal,
                   'cantidad': descontado,
                   'fechaCaducidad': m['fechaCaducidad'],
                   'nombreProveedor': m['nombreProveedor'] ?? 'ND',
@@ -420,7 +516,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               batch.update(docMision.reference, {'estado': 'completada', 'completadaPor': widget.usuarioActual});
               await batch.commit();
             },
-            child: const Text('RESTAURAR AL MUEBLE', style: TextStyle(color: Colors.orangeAccent, fontSize: 11)),
+            child: const Text('SOLO RESTAURAR AQUÍ', style: TextStyle(color: Colors.orangeAccent, fontSize: 11)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
@@ -428,7 +524,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               Navigator.pop(ctx);
               await docMision.reference.update({'estado': 'completada', 'completadaPor': widget.usuarioActual});
             },
-            child: const Text('CORRECTO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+            child: const Text('SÍ SALIÓ DE AQUÍ (OK)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
           ),
         ],
       ),
@@ -622,6 +718,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 children: [
                                   const SizedBox(height: 6),
                                   Text('📍 Ubicación: ${m['ubicacion'] ?? 'ND'} • 📦 Piezas: ${cantidad ?? 1}', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                                  if (m['otrasUbicaciones'] != null && (m['otrasUbicaciones'] as List).isNotEmpty)
+                                    Text('🔀 También en: ${(m['otrasUbicaciones'] as List).join(', ')}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                                   if (cad != null) Text('📅 Caducidad: ${cad.day}/${cad.month}/${cad.year}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                                   if (m['mensaje'] != null) Text(m['mensaje'], style: TextStyle(color: borderColor, fontSize: 11, fontStyle: FontStyle.italic)),
                                   if (_verHistorial && m['completadaPor'] != null) Text('👤 Cerrada por: ${m['completadaPor']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),

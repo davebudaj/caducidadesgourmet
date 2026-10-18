@@ -20,7 +20,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String _busqueda = "";
   String? _filtroProveedor;
   String? _filtroGrupo;
-  String? _filtroRiesgoEspecial; 
+  String? _filtroRiesgoEspecial;
+  String? _filtroTipoUbicacion;
+  String? _filtroMueble; 
   
   bool _modoSeleccion = false;
   Set<String> _seleccionados = {};
@@ -632,6 +634,12 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           
           var provs = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreProveedor']?.toString() ?? 'ND').toSet().toList()..sort();
           var grupos = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreGpoArticulos']?.toString() ?? 'ND').toSet().toList()..sort();
+          var mueblesDisponibles = snapshot.data!.docs
+              .map((doc) => (doc.data() as Map)['ubicacion']?.toString() ?? 'ND')
+              .where((u) => _filtroTipoUbicacion == null || u.toUpperCase().contains(_filtroTipoUbicacion!))
+              .toSet()
+              .toList()
+            ..sort();
 
           var docsFiltrados = snapshot.data!.docs.where((doc) {
             var data = doc.data() as Map<String, dynamic>;
@@ -640,6 +648,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             String ean = (data['ean'] ?? '').toString().toLowerCase();
             String prov = (data['nombreProveedor'] ?? 'ND').toString();
             String gpo = (data['nombreGpoArticulos'] ?? 'ND').toString();
+            String ubi = (data['ubicacion'] ?? 'ND').toString();
 
             DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
             int dias = cad.difference(DateTime.now()).inDays;
@@ -656,7 +665,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               else if (_filtroRiesgoEspecial == 'sano') coincideRiesgo = dias > 30;
             }
             
-            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo;
+            bool coincideTipoUbi = _filtroTipoUbicacion == null || ubi.toUpperCase().contains(_filtroTipoUbicacion!);
+            bool coincideMueble = _filtroMueble == null || ubi == _filtroMueble;
+            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble;
           }).toList();
 
           var docsFinales = docsFiltrados.take(100).toList();
@@ -684,6 +695,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                _filtroProveedor = null;
                                _filtroGrupo = null;
                                _filtroRiesgoEspecial = null;
+      _filtroTipoUbicacion = null;
+      _filtroMueble = null;
                              });
                           }
                         ),
@@ -797,6 +810,77 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             ],
                           ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro Ubicación', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 40,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroTipoUbicacion,
+                                    hint: const Text('Filtro Ubicación', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                    items: const [
+                                      DropdownMenuItem(value: null, child: Text('Ubicación: Todas', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
+                                      DropdownMenuItem(value: 'BODEGA', child: Text('📦 BODEGA', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 'PISO', child: Text('🏪 PISO', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 'DISPLAY', child: Text('✨ DISPLAY', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                                    ],
+                                    onChanged: (v) => setState(() {
+                                      _filtroTipoUbicacion = v;
+                                      _filtroMueble = null;
+                                    }),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (_filtroTipoUbicacion != null) ...[
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 4, bottom: 4),
+                                  child: Text('Muebles en $_filtroTipoUbicacion', style: const TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                                ),
+                                Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.cyanAccent.withOpacity(0.4))),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<String?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: (mueblesDisponibles.contains(_filtroMueble)) ? _filtroMueble : null,
+                                      hint: const Text('Nombre del mueble', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                      items: [
+                                        DropdownMenuItem(value: null, child: Text('Todos (${mueblesDisponibles.length})', style: const TextStyle(fontSize: 12, color: Colors.greenAccent))),
+                                        ...mueblesDisponibles.map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
+                                      ],
+                                      onChanged: (v) => setState(() => _filtroMueble = v),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     )
                   ],
