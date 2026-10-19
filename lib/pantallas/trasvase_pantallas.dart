@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 
 class PantallaTrasvaseMasivo extends StatefulWidget {
   final String idTiendaGlobal;
@@ -78,16 +79,9 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
       todasUbis.remove(kUbicacionTransito);
       List<String> ordenadas = todasUbis.toList()..sort();
 
-      String? ubiInicial = widget.ubicacionInicial;
-      if (ubiInicial == null || !ordenadas.contains(ubiInicial)) {
-        if (agrupado.containsKey('OPERACION TIENDA')) {
-          ubiInicial = 'OPERACION TIENDA';
-        } else if (agrupado.isNotEmpty) {
-          ubiInicial = agrupado.keys.first;
-        } else if (ordenadas.isNotEmpty) {
-          ubiInicial = ordenadas.first;
-        }
-      }
+      String? ubiInicial = (widget.ubicacionInicial != null && widget.ubicacionInicial != 'Sin anclar')
+          ? widget.ubicacionInicial
+          : null;
 
       if (mounted) {
         setState(() {
@@ -197,6 +191,35 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
         piezasMovidas += cantMover;
       }
 
+      // Sincronizar con Misiones de Auditoría: cerrar misiones de Política Bodega 90d de los lotes extraídos
+      var misionesSnap = await FirebaseFirestore.instance
+          .collection('tiendas')
+          .doc(widget.idTiendaGlobal)
+          .collection('misiones_auditoria')
+          .where('estado', isEqualTo: 'pendiente')
+          .get();
+
+      for (var entry in _cantidadesSeleccionadas.entries) {
+        if (entry.value <= 0) continue;
+        var docOrig = mapaDocs[entry.key];
+        if (docOrig == null) continue;
+        var dOrig = docOrig.data();
+        String skuOrig = (dOrig['sku'] ?? '').toString();
+        String ubiOrig = (dOrig['ubicacion'] ?? '').toString();
+
+        for (var mDoc in misionesSnap.docs) {
+          var mData = mDoc.data();
+          String msg = (mData['mensaje'] ?? '').toString();
+          if (msg.contains('90 DÍAS') && (mData['sku'] ?? '') == skuOrig && (mData['ubicacion'] ?? '') == ubiOrig) {
+            batch.update(mDoc.reference, {
+              'estado': 'completada',
+              'completadaPor': '${widget.usuarioRegistra} (Trasvase)',
+              'accionRealizada': 'carrito',
+            });
+          }
+        }
+      }
+
       await batch.commit();
       if (mounted) {
         Navigator.pop(context);
@@ -215,11 +238,16 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
   @override
   Widget build(BuildContext context) {
     var lotesActuales = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-    if (_ubicacionSeleccionada != null) {
+    if (_ubicacionSeleccionada != null && _ubicacionSeleccionada!.trim().isNotEmpty) {
+      List<String> prefijoElegido = JerarquiaUbicacionHelper.descomponerRuta(_ubicacionSeleccionada!);
       for (var entry in _lotesPorUbicacion.entries) {
-        if (entry.key == _ubicacionSeleccionada || entry.key.startsWith('${_ubicacionSeleccionada!} > ')) {
+        if (JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(entry.key, prefijoElegido)) {
           lotesActuales.addAll(entry.value);
         }
+      }
+    } else if (_busquedaInterna.isNotEmpty) {
+      for (var entry in _lotesPorUbicacion.entries) {
+        lotesActuales.addAll(entry.value);
       }
     }
     var lotesFiltrados = lotesActuales.where((doc) {
@@ -246,31 +274,13 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
               padding: const EdgeInsets.all(14.0),
               child: Column(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.12), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.blueAccent, width: 1.5)),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        isExpanded: true,
-                        dropdownColor: const Color(0xFF2C2C2C),
-                        value: _ubicacionSeleccionada,
-                        hint: const Text('Selecciona Ubicación de Origen', style: TextStyle(color: Colors.white70)),
-                        items: _listaUbicaciones.map((u) {
-                          int count = _lotesPorUbicacion[u]?.length ?? 0;
-                          return DropdownMenuItem<String>(
-                            value: u,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(child: Text('📍 $u', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis)),
-                                Text('$count lotes', style: TextStyle(fontSize: 11, color: count > 0 ? Colors.greenAccent : Colors.white38, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (val) => setState(() => _ubicacionSeleccionada = val),
-                      ),
-                    ),
+                  SelectorJerarquicoUbicacion(
+                    todasLasRutas: _listaUbicaciones,
+                    rutaSeleccionada: _ubicacionSeleccionada,
+                    permitirSeleccionParcial: true,
+                    textoRaizVacio: '🎯 1. Selecciona Área de Origen (Piso / Bodega / Display)...',
+                    conteoLotesPorRuta: {for (var e in _lotesPorUbicacion.entries) e.key: e.value.length},
+                    onRutaCambiada: (val) => setState(() => _ubicacionSeleccionada = val),
                   ),
                   const SizedBox(height: 10),
                   Row(
@@ -314,7 +324,15 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                   const SizedBox(height: 10),
                   Expanded(
                     child: lotesFiltrados.isEmpty
-                        ? const Center(child: Text('No hay lotes en esta ubicación.', style: TextStyle(color: Colors.white54)))
+                        ? Center(
+                          child: Text(
+                            _ubicacionSeleccionada == null && _busquedaInterna.isEmpty
+                                ? '👆 Selecciona el Área arriba (Piso / Bodega / Display) para desplegar sus muebles y lotes.'
+                                : 'No hay lotes registrados en esta ubicación.',
+                            style: const TextStyle(color: Colors.white54, fontSize: 13),
+                            textAlign: TextAlign.center,
+                          ),
+                        )
                         : ListView.builder(
                             itemCount: lotesFiltrados.length,
                             itemBuilder: (context, i) {
@@ -363,6 +381,7 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                                             children: [
                                               Text('📅 Cad: $fechaFormateada ($dias d)', style: TextStyle(color: dias <= 15 ? Colors.redAccent : Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
                                               Text('📦 Existencia: $maximoPermitido pzas', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                              Text('📍 Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
                                             ],
                                           ),
                                           Row(
@@ -634,23 +653,12 @@ class _PantallaCarritoTemporalState extends State<PantallaCarritoTemporal> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: _muebleDestino != null ? Colors.green.withOpacity(0.15) : Colors.white10,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _muebleDestino != null ? Colors.greenAccent : Colors.deepOrangeAccent, width: 1.5),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        isExpanded: true,
-                        dropdownColor: const Color(0xFF2C2C2C),
-                        value: _muebleDestino,
-                        hint: const Text('🎯 1. Selecciona el MUEBLE DESTINO aquí...', style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
-                        items: _listaMuebles.map((u) => DropdownMenuItem<String>(value: u, child: Text('🎯 Destino: $u', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)))).toList(),
-                        onChanged: (val) => setState(() => _muebleDestino = val),
-                      ),
-                    ),
+                  SelectorJerarquicoUbicacion(
+                    todasLasRutas: _listaMuebles,
+                    rutaSeleccionada: _muebleDestino,
+                    permitirSeleccionParcial: false,
+                    textoRaizVacio: '🎯 1. Selecciona Área de Destino (Piso / Bodega / Display)...',
+                    onRutaCambiada: (val) => setState(() => _muebleDestino = val),
                   ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -710,7 +718,11 @@ class _PantallaCarritoTemporalState extends State<PantallaCarritoTemporal> {
                                               crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
                                                 Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                                Text('SKU: ${d['sku']} • Salió de: $origen', style: const TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                                                Text('SKU: ${d['sku']}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                                Text(
+                                                  '📍 De: ${JerarquiaUbicacionHelper.formatearRutaVisual(origen)}  ➔  Para: ${_muebleDestino != null ? JerarquiaUbicacionHelper.formatearRutaVisual(_muebleDestino) : "Selecciona destino arriba"}',
+                                                  style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                ),
                                               ],
                                             ),
                                           ),

@@ -99,6 +99,7 @@ class _PantallaLoginState extends State<PantallaLogin> {
           builder: (_) => NavegacionPrincipal(
             esJefe: true,
             nombreUsuario: "Administrador Maestro",
+            rolUsuario: "DIRECTOR",
             numeroEmpleado: "000",
             idTiendaGlobal: idTiendaGlobal,
             nombreTienda: nombreTiendaReal,
@@ -131,6 +132,7 @@ class _PantallaLoginState extends State<PantallaLogin> {
               builder: (_) => NavegacionPrincipal(
                 esJefe: esJefe,
                 nombreUsuario: nombre,
+                rolUsuario: rol.isEmpty ? "COLABORADOR" : rol.toUpperCase(),
                 numeroEmpleado: numEmp,
                 idTiendaGlobal: idTiendaGlobal,
                 nombreTienda: nombreTiendaReal,
@@ -161,7 +163,10 @@ class _PantallaLoginState extends State<PantallaLogin> {
         decoration: const BoxDecoration(
           gradient: LinearGradient(colors: [Color(0xFF121212), Color(0xFF2C2C2C)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
         ),
-        child: SingleChildScrollView(
+        child: Stack(
+          children: [
+            Center(
+              child: SingleChildScrollView(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -255,6 +260,34 @@ class _PantallaLoginState extends State<PantallaLogin> {
               const SizedBox(height: 80),
             ],
           ),
+            ),
+            Positioned(
+              left: 16,
+              bottom: 12,
+              child: Text(
+                'Para Sofia',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.08),
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+            const Positioned(
+              right: 16,
+              bottom: 12,
+              child: Text(
+                'Por: DJTAPIAB',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

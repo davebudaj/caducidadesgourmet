@@ -12,6 +12,7 @@ import 'admin.dart';
 class NavegacionPrincipal extends StatefulWidget {
   final bool esJefe;
   final String nombreUsuario;
+  final String rolUsuario;
   final String numeroEmpleado;
   final String idTiendaGlobal;
   final String nombreTienda;
@@ -20,6 +21,7 @@ class NavegacionPrincipal extends StatefulWidget {
     super.key,
     required this.esJefe,
     required this.nombreUsuario,
+    this.rolUsuario = 'JEFE',
     required this.numeroEmpleado,
     required this.idTiendaGlobal,
     required this.nombreTienda,
@@ -263,7 +265,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
       pantallas.add(PantallaGraficas(onFiltroSeleccionado: _navegarASabanaConFiltro, idTiendaGlobal: widget.idTiendaGlobal));
       items.add(const BottomNavigationBarItem(icon: Icon(Icons.pie_chart), label: 'Finanzas'));
 
-      pantallas.add(PantallaCorporativo(idTiendaGlobal: widget.idTiendaGlobal));
+      pantallas.add(PantallaCorporativo(idTiendaGlobal: widget.idTiendaGlobal, nombreUsuario: widget.nombreUsuario, rolUsuario: widget.rolUsuario));
       items.add(const BottomNavigationBarItem(icon: Icon(Icons.account_balance), label: 'Corp'));
 
       pantallas.add(PantallaAdmin(idTiendaGlobal: widget.idTiendaGlobal, nombreTienda: widget.nombreTienda));

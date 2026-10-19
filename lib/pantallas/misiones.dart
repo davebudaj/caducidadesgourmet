@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'trasvase_pantallas.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 import 'finanzas.dart';
 
 class PantallaMisiones extends StatefulWidget {
@@ -17,6 +18,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   bool _verHistorial = false;
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
+  int? _filtroTipoMision;
   static const String kUbicacionTransito = 'EN TRÁNSITO';
 
   CollectionReference<Map<String, dynamic>> get _refInv =>
@@ -637,11 +639,107 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   Future<void> _generarMisionesAutomaticas() async {
     setState(() => _actualizando = true);
     try {
-      var snapshot = await _refInv.get();
+      var results = await Future.wait([
+        _refInv.get(),
+        _refMisiones.where('estado', isEqualTo: 'pendiente').get(),
+      ]);
+      var snapshot = results[0];
+      var misionesPendSnap = results[1];
+
       DateTime hoy = DateTime.now();
       var batch = FirebaseFirestore.instance.batch();
       int misionesNuevas = 0;
+      int misionesAutocerradas = 0;
 
+      // 1. AUTO-CONCILIACIÓN CON SÁBANA Y TRASVASE:
+      // Revisar si alguna misión pendiente (Bodega 90d, 45d, 15d o Carrito) ya fue atendida desde Trasvase o Sábana
+      for (var mDoc in misionesPendSnap.docs) {
+        var m = mDoc.data();
+        int prio = _getPriority(m);
+        if (prio == 4) continue; // Las de venta SAP se validan manualmente en piso
+
+        String mSku = (m['sku'] ?? '').toString();
+        String mUbi = (m['ubicacion'] ?? '').toString();
+        Timestamp? mTs = m['fechaCaducidad'];
+
+        if (prio == 0) {
+          // Carrito abandonado: verificar si sigue en EN TRÁNSITO
+          bool sigueEnCarrito = snapshot.docs.any((d) {
+            var data = d.data();
+            return (data['ubicacion'] ?? '') == kUbicacionTransito && (data['sku'] ?? '') == mSku;
+          });
+          if (!sigueEnCarrito) {
+            batch.update(mDoc.reference, {
+              'estado': 'completada',
+              'completadaPor': 'Auto-Trasvase',
+            });
+            misionesAutocerradas++;
+          }
+          continue;
+        }
+
+        // Buscar si el lote sigue existiendo con esa misma fecha de caducidad
+        QueryDocumentSnapshot<Map<String, dynamic>>? loteMismaUbicacion;
+        QueryDocumentSnapshot<Map<String, dynamic>>? loteEnPiso;
+
+        for (var d in snapshot.docs) {
+          var data = d.data();
+          if ((data['sku'] ?? '').toString() != mSku) continue;
+          if (mTs != null && data['fechaCaducidad'] != null) {
+            DateTime f1 = mTs.toDate();
+            DateTime f2 = (data['fechaCaducidad'] as Timestamp).toDate();
+            if (f1.year == f2.year && f1.month == f2.month && f1.day == f2.day) {
+              String uActual = (data['ubicacion'] ?? '').toString();
+              if (uActual == mUbi) {
+                loteMismaUbicacion = d;
+                break;
+              } else if (uActual != kUbicacionTransito) {
+                loteEnPiso = d;
+              }
+            }
+          }
+        }
+
+        if (prio == 2) {
+          // Política Bodega 90 días: si ya no está en esa bodega (porque se trasvasó a piso o carrito), se autocompleta
+          if (loteMismaUbicacion == null) {
+            batch.update(mDoc.reference, {
+              'estado': 'completada',
+              'completadaPor': 'Sincronizado por Trasvase',
+              'accionRealizada': 'trasvase',
+            });
+            misionesAutocerradas++;
+          }
+        } else if (prio == 1 || prio == 3) {
+          // Caducidad 45d o 15d: si ya se le dio salida total en Sábana, se autocompleta; si se movió de mueble, actualiza su ubicación
+          if (loteMismaUbicacion == null) {
+            if (loteEnPiso != null) {
+              batch.update(mDoc.reference, {
+                'ubicacion': loteEnPiso.data()['ubicacion'],
+                'cantidad': loteEnPiso.data()['cantidad'],
+              });
+            } else {
+              batch.update(mDoc.reference, {
+                'estado': 'completada',
+                'completadaPor': 'Sincronizado con Sábana',
+              });
+              misionesAutocerradas++;
+            }
+          } else {
+            // Si en la Sábana ya le aplicaron Promoción a una de 45d, cerrar la misión de 45d
+            if (prio == 3 && loteMismaUbicacion.data()['enPromocion'] == true) {
+              batch.update(mDoc.reference, {
+                'estado': 'completada',
+                'completadaPor': 'Promoción en Sábana',
+                'accionRealizada': 'promocion',
+              });
+              misionesAutocerradas++;
+            }
+          }
+        }
+      }
+
+      // 2. GENERAR NUEVAS MISIONES SI HAY LOTES QUE ENTRARON EN RIESGO
       for (var doc in snapshot.docs) {
         var data = doc.data();
         String ubicacion = (data['ubicacion'] ?? '').toString().toUpperCase();
@@ -650,7 +748,6 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
           DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
           int dias = cad.difference(hoy).inDays;
 
-          // Reactivación crítica a los 15 días (Solo Merma o Devolución)
           if (dias <= 15 && data['misionReactivada15d'] != true) {
             batch.set(_refMisiones.doc(), {
               'sku': data['sku'],
@@ -662,6 +759,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
               if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
+              if (data['autorComentarioCorp'] != null) 'autorComentarioCorp': data['autorComentarioCorp'],
               'soloMermaODevolucion': true,
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': '🔥 REACTIVACIÓN 15 DÍAS: Lote en límite crítico. Proceder únicamente con Merma o Devolución',
@@ -679,6 +777,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
               if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
+              if (data['autorComentarioCorp'] != null) 'autorComentarioCorp': data['autorComentarioCorp'],
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': 'Verificar lote próximo a vencer (45 días)',
             });
@@ -697,6 +796,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
               'estado': 'pendiente',
               if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
+              if (data['autorComentarioCorp'] != null) 'autorComentarioCorp': data['autorComentarioCorp'],
               'fechaGeneracion': FieldValue.serverTimestamp(),
               'mensaje': '🚨 POLÍTICA 90 DÍAS: Extraer de Bodega y reubicar en Piso/Display',
             });
@@ -705,7 +805,21 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
           }
         }
       }
-      if (misionesNuevas > 0) await batch.commit();
+
+      if (misionesNuevas > 0 || misionesAutocerradas > 0) {
+        await batch.commit();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '🔄 Sincronizado: $misionesNuevas nuevas • $misionesAutocerradas actualizadas por Trasvase/Sábana',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            backgroundColor: Colors.green.shade700,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _actualizando = false);
     }
@@ -786,19 +900,14 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                     String p = (d['nombreProveedor'] ?? 'ND').toString();
                     String u = (d['ubicacion'] ?? 'ND').toString();
                     bool okProv = _filtroProveedorMision == null || p == _filtroProveedorMision;
-                    bool okMueble = _filtroMuebleMision == null || u == _filtroMuebleMision;
-                    return okProv && okMueble;
+                    List<String> prefMueble = _filtroMuebleMision != null
+                        ? JerarquiaUbicacionHelper.descomponerRuta(_filtroMuebleMision!)
+                        : [];
+                    bool okMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(u, prefMueble);
+                    int tipoPrio = _getPriority(d);
+                    bool okTipo = _filtroTipoMision == null || tipoPrio == _filtroTipoMision;
+                    return okProv && okMueble && okTipo;
                   }).toList();
-
-                  if (lista.isEmpty) {
-                    return Center(
-                      child: Text(
-                        _verHistorial ? 'Aún no hay misiones en el historial.' : '¡Piso Limpio!\nSin misiones pendientes.',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.greenAccent),
-                        textAlign: TextAlign.center,
-                      ),
-                    );
-                  }
 
                   lista.sort((a, b) {
                     var dA = a.data() as Map<String, dynamic>;
@@ -819,10 +928,36 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                         color: Colors.black,
                         padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
                         child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(
                               child: Container(
-                                height: 38,
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: _filtroTipoMision != null ? Colors.amber : Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<int?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroTipoMision,
+                                    hint: const Text('Tipo de Misión', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    items: const [
+                                      DropdownMenuItem(value: null, child: Text('📋 Tipo: Todas las Misiones', style: TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 0, child: Text('🛒 Carrito Abandonado', style: TextStyle(fontSize: 11, color: Colors.deepOrangeAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 1, child: Text('🔥 Crítico ≤ 15 Días (Reactivación)', style: TextStyle(fontSize: 11, color: Colors.redAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 2, child: Text('🚨 Política Bodega (90 Días)', style: TextStyle(fontSize: 11, color: Colors.pinkAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 3, child: Text('⚠️ Caducidad Cercana (45 Días)', style: TextStyle(fontSize: 11, color: Colors.orangeAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 4, child: Text('🛒 Descontar Venta (SAP)', style: TextStyle(fontSize: 11, color: Colors.blueAccent, fontWeight: FontWeight.bold))),
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroTipoMision = v),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Container(
+                                height: 44,
                                 padding: const EdgeInsets.symmetric(horizontal: 10),
                                 decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
                                 child: DropdownButtonHideUnderline(
@@ -842,39 +977,58 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                             ),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: Container(
-                                height: 38,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String?>(
-                                    isExpanded: true,
-                                    dropdownColor: const Color(0xFF2C2C2C),
-                                    value: mueblesDisponibles.contains(_filtroMuebleMision) ? _filtroMuebleMision : null,
-                                    hint: const Text('Filtro Mueble', style: TextStyle(fontSize: 11, color: Colors.white54)),
-                                    items: [
-                                      const DropdownMenuItem(value: null, child: Text('Mueble: Todos', style: TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold))),
-                                      ...mueblesDisponibles.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
-                                    ],
-                                    onChanged: (v) => setState(() => _filtroMuebleMision = v),
-                                  ),
-                                ),
+                              flex: 2,
+                              child: SelectorJerarquicoUbicacion(
+                                todasLasRutas: mueblesDisponibles,
+                                rutaSeleccionada: _filtroMuebleMision,
+                                permitirSeleccionParcial: true,
+                                textoRaizVacio: 'Mueble: Mostrar Todo',
+                                onRutaCambiada: (v) => setState(() => _filtroMuebleMision = v),
                               ),
                             ),
-                            if (_filtroProveedorMision != null || _filtroMuebleMision != null)
+                            if (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null)
                               IconButton(
                                 icon: const Icon(Icons.filter_alt_off, color: Colors.redAccent, size: 18),
                                 tooltip: 'Limpiar filtros',
                                 onPressed: () => setState(() {
                                   _filtroProveedorMision = null;
                                   _filtroMuebleMision = null;
+                                  _filtroTipoMision = null;
                                 }),
                               ),
                           ],
                         ),
                       ),
                       Expanded(
-                        child: ListView.builder(
+                        child: lista.isEmpty
+                            ? Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null)
+                                          ? 'No hay misiones que coincidan con este filtro.'
+                                          : (_verHistorial ? 'Aún no hay misiones en el historial.' : '¡Piso Limpio!\nSin misiones pendientes.'),
+                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                    if (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null) ...[
+                                      const SizedBox(height: 14),
+                                      ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                                        icon: const Icon(Icons.filter_alt_off, size: 18),
+                                        label: const Text('ELIMINAR FILTROS', style: TextStyle(fontWeight: FontWeight.bold)),
+                                        onPressed: () => setState(() {
+                                          _filtroProveedorMision = null;
+                                          _filtroMuebleMision = null;
+                                          _filtroTipoMision = null;
+                                        }),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              )
+                            : ListView.builder(
                           physics: const AlwaysScrollableScrollPhysics(),
                           itemCount: lista.length,
                     itemBuilder: (context, i) {
@@ -911,14 +1065,14 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const SizedBox(height: 6),
-                                  Text('📍 Ubicación: ${m['ubicacion'] ?? 'ND'} • 📦 Piezas: ${cantidad ?? 1}', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                                  Text('📍 Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(m['ubicacion']?.toString())} • 📦 Piezas: ${cantidad ?? 1}', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
                                   if (m['otrasUbicaciones'] != null && (m['otrasUbicaciones'] as List).isNotEmpty)
                                     Text('🔀 También en: ${(m['otrasUbicaciones'] as List).join(', ')}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                                   if (cad != null) Text('📅 Caducidad: ${cad.day}/${cad.month}/${cad.year}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                                   if (m['comentarioCorporativo'] != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 3, bottom: 2),
-                                      child: Text('🏢 INSTRUCCIÓN CORP: ${m['comentarioCorporativo']}', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                      child: Text('🏢 INSTRUCCIÓN (${m['autorComentarioCorp'] ?? 'CORP'}): ${m['comentarioCorporativo']}', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold)),
                                     ),
                                   if (m['mensaje'] != null) Text(m['mensaje'], style: TextStyle(color: borderColor, fontSize: 11, fontStyle: FontStyle.italic)),
                                   if (_verHistorial && m['completadaPor'] != null) Text('👤 Cerrada por: ${m['completadaPor']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),

@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'ingreso.dart';
 import 'login.dart';
 import 'trasvase_pantallas.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 
 class PantallaEscaner extends StatefulWidget {
   final bool estaActiva;
@@ -298,7 +299,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                       icon: const Icon(Icons.swap_horiz_rounded, size: 20),
                       label: const Text('TRASVASE MASIVO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                      onPressed: () => _irATrasvaseMasivo(ubicacionInicial: _ubicacionDestino),
+                      onPressed: () => _irATrasvaseMasivo(),
                     ),
                   ),
                 ),
@@ -647,28 +648,27 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
                 List<String> todas = snapshot.data!.docs.map((d) => d['nombre'] as String).where((n) => n != 'EN TRÁNSITO').toList();
                 List<String> listaMuebles = todas.where((u) => !todas.any((otra) => otra.startsWith('$u > '))).toList();
                 if (_ubicacionSeleccionada != null && !listaMuebles.contains(_ubicacionSeleccionada)) listaMuebles.add(_ubicacionSeleccionada!);
-                return Container(
-                  height: 56,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(5), border: const Border(bottom: BorderSide(color: Colors.white54))),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.location_on, color: Colors.white54),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            isExpanded: true,
-                            dropdownColor: const Color(0xFF2C2C2C),
-                            hint: const Text('Selecciona Mueble', style: TextStyle(color: Colors.white54)),
-                            value: _ubicacionSeleccionada,
-                            items: listaMuebles.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
-                            onChanged: (val) => setState(() => _ubicacionSeleccionada = val),
-                          ),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Ubicación Exacta (Jerarquía):', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    SelectorJerarquicoUbicacion(
+                      todasLasRutas: listaMuebles,
+                      rutaSeleccionada: _ubicacionSeleccionada,
+                      permitirSeleccionParcial: false,
+                      textoRaizVacio: '1. Selecciona Área (Piso / Bodega / Display)...',
+                      onRutaCambiada: (val) => setState(() => _ubicacionSeleccionada = val),
+                    ),
+                    if (_ubicacionSeleccionada != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          '✅ Destino seleccionado: ${JerarquiaUbicacionHelper.formatearRutaVisual(_ubicacionSeleccionada)}',
+                          style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
                         ),
                       ),
-                    ],
-                  ),
+                  ],
                 );
               },
             ),

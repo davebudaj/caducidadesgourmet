@@ -3,7 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PantallaCorporativo extends StatefulWidget {
   final String idTiendaGlobal;
-  const PantallaCorporativo({super.key, required this.idTiendaGlobal});
+  final String nombreUsuario;
+  final String rolUsuario;
+  const PantallaCorporativo({super.key, required this.idTiendaGlobal, this.nombreUsuario = 'Administrador', this.rolUsuario = 'JEFE'});
   @override
   State<PantallaCorporativo> createState() => _PantallaCorporativoState();
 }
@@ -108,8 +110,10 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
                             if (_seleccionados.contains(doc.id)) {
                               var data = doc.data() as Map<String, dynamic>;
                               if (data['sku'] != null) skusSeleccionados.add(data['sku'].toString());
+                              String etiquetaAutor = '${widget.rolUsuario.toUpperCase()} - ${widget.nombreUsuario.toUpperCase()}';
                               batch.update(refTienda.collection('inventario_activo').doc(doc.id), {
                                 'comentarioCorporativo': comentario,
+                                'autorComentarioCorp': etiquetaAutor,
                               });
                             }
                           }
@@ -120,7 +124,10 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
                             for (var mDoc in misionesSnap.docs) {
                               var mData = mDoc.data();
                               if (skusSeleccionados.contains((mData['sku'] ?? '').toString())) {
-                                batch.update(mDoc.reference, {'comentarioCorporativo': comentario});
+                                batch.update(mDoc.reference, {
+                                  'comentarioCorporativo': comentario,
+                                  'autorComentarioCorp': '${widget.rolUsuario.toUpperCase()} - ${widget.nombreUsuario.toUpperCase()}',
+                                });
                               }
                             }
                           }
@@ -273,7 +280,10 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
                                   children: [
                                     Text('${d['cantidad']} pzas • Vence en $dias días • ${d['ubicacion'] ?? 'ND'}', style: const TextStyle(fontSize: 10, color: Colors.amber)),
                                     if (d['comentarioCorporativo'] != null)
-                                      Text('INSTRUCCIÓN: ${d['comentarioCorporativo']}', style: const TextStyle(fontSize: 10, color: Colors.pinkAccent, fontWeight: FontWeight.bold)),
+                                      Text(
+                                        '🏢 INSTRUCCIÓN (${d['autorComentarioCorp'] ?? 'CORPORATIVO'}): ${d['comentarioCorporativo']}',
+                                        style: const TextStyle(fontSize: 10, color: Colors.pinkAccent, fontWeight: FontWeight.bold),
+                                      ),
                                     if (d['instruccionCorpEjecutada'] == true)
                                       Text('✅ EJECUTADA POR: ${d['ejecutadaPorCorp'] ?? 'Piso'} (${d['motivoEjecucionCorp'] ?? 'OK'})', style: const TextStyle(fontSize: 10, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                                   ],

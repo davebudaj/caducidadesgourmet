@@ -35,6 +35,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
   late DocumentReference _refTienda;
   String _ultimaActualizacion = "Buscando...";
+  String _ultimaCargaVentas = "Ventas sin cargar";
   String _ultimoBackup = "Sin respaldo reciente";
   final Set<String> _ramasContraidas = {};
 
@@ -43,6 +44,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     super.initState();
     _refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
     _obtenerUltimaActualizacion();
+    _obtenerUltimaCargaVentas();
     _obtenerUltimoBackup();
   }
 
@@ -471,6 +473,172 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     );
   }
 
+  Future<void> _obtenerUltimaCargaVentas() async {
+    try {
+      var doc = await _refTienda.get();
+      if (doc.exists) {
+        var data = doc.data() as Map<String, dynamic>?;
+        Timestamp? ts = data?['ultima_carga_ventas'];
+        if (ts != null) {
+          DateTime dt = ts.toDate();
+          if (mounted) {
+            setState(() => _ultimaCargaVentas = 'Última carga: ${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} a las ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}');
+          }
+          return;
+        }
+      }
+      if (mounted) setState(() => _ultimaCargaVentas = 'Ventas sin cargar');
+    } catch (_) {}
+  }
+
+  void _abrirSelectorImpresionQRs() async {
+    var snap = await _refTienda.collection('ubicaciones').orderBy('nombre').get();
+    List<String> todas = snap.docs
+        .map((d) => d['nombre'].toString())
+        .where((n) => n != 'EN TRÁNSITO')
+        .toList();
+
+    if (!mounted) return;
+    Set<String> elegidas = {};
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 1.5)),
+            title: const Row(
+              children: [
+                Icon(Icons.print, color: Colors.amber, size: 22),
+                SizedBox(width: 8),
+                Expanded(child: Text('Seleccionar QRs para Imprimir / Descargar', style: TextStyle(color: Colors.amber, fontSize: 14, fontWeight: FontWeight.bold))),
+              ],
+            ),
+            content: SizedBox(
+              width: 480,
+              height: 380,
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('${elegidas.length} seleccionados', style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: () => setModalState(() => elegidas.clear()),
+                            child: const Text('Ninguno', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          ),
+                          TextButton(
+                            onPressed: () => setModalState(() => elegidas.addAll(todas)),
+                            child: const Text('Seleccionar Todos', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const Divider(color: Colors.white24, height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: todas.length,
+                      itemBuilder: (c, i) {
+                        String u = todas[i];
+                        bool sel = elegidas.contains(u);
+                        return CheckboxListTile(
+                          dense: true,
+                          activeColor: Colors.amber,
+                          checkColor: Colors.black,
+                          value: sel,
+                          title: Text(u.replaceAll(' > ', ' ➔ '), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onChanged: (v) {
+                            setModalState(() {
+                              if (v == true) {
+                                elegidas.add(u);
+                              } else {
+                                elegidas.remove(u);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                icon: const Icon(Icons.print, size: 18),
+                label: Text('GENERAR PLANTILLA (${elegidas.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                onPressed: elegidas.isEmpty
+                    ? null
+                    : () {
+                        Navigator.pop(ctx);
+                        _generarPlantillaImprimibleQRs(elegidas.toList());
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _generarPlantillaImprimibleQRs(List<String> ubicacionesElegidas) {
+    StringBuffer tarjetasHtml = StringBuffer();
+    for (String u in ubicacionesElegidas) {
+      String dataQr = Uri.encodeComponent('LOC:$u');
+      String urlQr = 'https://quickchart.io/qr?text=$dataQr&size=240&margin=1';
+      tarjetasHtml.writeln('''
+        <div class="card">
+          <div class="tienda">${widget.nombreTienda}</div>
+          <img src="$urlQr" width="165" height="165" alt="QR" />
+          <div class="ruta">${u.replaceAll(' > ', ' ➔ ')}</div>
+        </div>
+      ''');
+    }
+
+    String documentoHtml = '''
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Plantilla QRs - ${widget.nombreTienda}</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 20px; text-align: center; }
+    .no-print { margin-bottom: 20px; padding: 12px; background: #1e1e1e; color: white; border-radius: 10px; }
+    .btn { background: #ffc107; color: #000; border: none; padding: 10px 22px; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; }
+    .card { background: white; border: 2px dashed #333; border-radius: 10px; width: 205px; padding: 10px; page-break-inside: avoid; box-sizing: border-box; }
+    .tienda { font-size: 10px; color: #666; font-weight: bold; margin-bottom: 4px; letter-spacing: 1px; }
+    .ruta { font-size: 12px; font-weight: bold; color: #000; margin-top: 6px; word-wrap: break-word; }
+    @media print {
+      body { background: white; margin: 0; }
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <span style="margin-right: 15px;">Plantilla lista con ${ubicacionesElegidas.length} códigos QR para recortar y pegar</span>
+    <button class="btn" onclick="window.print()">🖨️ IMPRIMIR / GUARDAR PDF</button>
+  </div>
+  <div class="grid">
+    ${tarjetasHtml.toString()}
+  </div>
+</body>
+</html>
+''';
+
+    final bytes = utf8.encode(documentoHtml);
+    final blob = html.Blob([bytes], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+  }
+
   void _mostrarYDescargarQR(String nombreMueble) {
     showDialog(
       context: context,
@@ -704,6 +872,8 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             }
           }
         }
+        await _refTienda.set({'ultima_carga_ventas': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+        await _obtenerUltimaCargaVentas();
         setState(() { _procesando = false; _estado = "¡Cierre de Ventas Exitoso!\nMisiones Nuevas: $misionesNuevas | Actualizadas: $misionesActualizadas"; });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
@@ -756,7 +926,13 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                   ),
                 ),
                 const SizedBox(height: 15),
-                SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA'), onPressed: _cargarVentasDiariasCSV)),
+                Column(
+                  children: [
+                    SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black), icon: const Icon(Icons.point_of_sale), label: const Text('2. SUBIR VENTAS DEL DÍA'), onPressed: _cargarVentasDiariasCSV)),
+                    const SizedBox(height: 5),
+                    Text(_ultimaCargaVentas, style: const TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold)),
+                  ],
+                ),
                 const SizedBox(height: 20),
                 Container(
                   padding: const EdgeInsets.all(14),
@@ -806,6 +982,17 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                   const Expanded(
                     child: Text('Arquitectura de Ubicaciones (Árbol de Muebles)', style: TextStyle(fontSize: 16, color: Colors.amber, fontWeight: FontWeight.bold)),
                   ),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    icon: const Icon(Icons.print, size: 16),
+                    label: const Text('Imprimir QRs', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    onPressed: _abrirSelectorImpresionQRs,
+                  ),
+                  const SizedBox(width: 6),
                   TextButton.icon(
                     icon: const Icon(Icons.unfold_less, color: Colors.cyanAccent, size: 16),
                     label: const Text('Contraer/Expandir', style: TextStyle(color: Colors.cyanAccent, fontSize: 11)),

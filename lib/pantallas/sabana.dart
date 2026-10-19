@@ -5,6 +5,7 @@ import 'package:universal_html/html.dart' as html;
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../modelos/etiqueta_mes.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 import 'finanzas.dart';
 
 class PantallaDashboard extends StatefulWidget {
@@ -1033,13 +1034,20 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                 decoration: BoxDecoration(color: etiqueta['color'].withOpacity(0.2), shape: BoxShape.circle, border: Border.all(color: etiqueta['color'])),
                                 child: Center(child: Text(dias.toString(), style: TextStyle(color: etiqueta['color'], fontWeight: FontWeight.bold, fontSize: 14))),
                               ),
-                              title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis),
+                              title: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis),
+                                  const SizedBox(height: 2),
+                                  Text('SKU: ${d['sku'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
                               subtitle: Padding(
                                 padding: const EdgeInsets.only(top: 4),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(d['cantidad'].toString() + ' pzas • Ubicación: ' + d['ubicacion'].toString(), style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    Text('${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
                                     if (d['enPromocion'] == true)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),
@@ -1058,8 +1066,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                         padding: const EdgeInsets.only(top: 4),
                                         child: Text(
                                           d['instruccionCorpEjecutada'] == true
-                                              ? '✅ CORP EJECUTADO (${d['motivoEjecucionCorp'] ?? 'Atendido'}): ${d['comentarioCorporativo']}'
-                                              : 'INSTRUCCIÓN: ${d['comentarioCorporativo']}',
+                                              ? '✅ CORP EJECUTADO (${d['motivoEjecucionCorp'] ?? 'Atendido'}) [${d['autorComentarioCorp'] ?? 'CORP'}]: ${d['comentarioCorporativo']}'
+                                              : '🏢 INSTRUCCIÓN (${d['autorComentarioCorp'] ?? 'CORP'}): ${d['comentarioCorporativo']}',
                                           style: TextStyle(
                                             color: d['instruccionCorpEjecutada'] == true ? Colors.greenAccent : Colors.pinkAccent,
                                             fontSize: 11,
