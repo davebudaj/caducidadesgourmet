@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:universal_html/html.dart' as html;
 
 import 'ingreso.dart';
 import 'login.dart';
@@ -27,6 +28,8 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   final TextEditingController _skuController = TextEditingController();
   String? _ubicacionDestino;
   bool _modoTrasvase = false;
+  bool _camaraActiva = true;
+  final FocusNode _skuManualFocus = FocusNode();
 
   late AnimationController _laserController;
   late Animation<double> _laserAnimation;
@@ -44,7 +47,12 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   @override
   void initState() {
     super.initState();
-    _laserController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat(reverse: true);
+    try {
+      String? camPref = html.window.localStorage['gg_camara_activa'];
+      if (camPref != null) _camaraActiva = camPref == 'true';
+    } catch (_) {}
+    _laserController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+    if (_camaraActiva) _laserController.repeat(reverse: true);
     _laserAnimation = Tween<double>(begin: 10.0, end: 180.0).animate(_laserController);
   }
 
@@ -52,6 +60,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   void dispose() {
     _laserController.dispose();
     _skuController.dispose();
+    _skuManualFocus.dispose();
     super.dispose();
   }
 
@@ -255,18 +264,53 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
 
   @override
   Widget build(BuildContext context) {
-    bool mostrarCamara = widget.estaActiva && !_enSubPantalla;
+    bool mostrarCamara = widget.estaActiva && !_enSubPantalla && _camaraActiva;
 
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.logout, color: Colors.redAccent),
-          onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const PantallaLogin())),
+        leadingWidth: 118,
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              padding: const EdgeInsets.only(left: 6),
+              constraints: const BoxConstraints(),
+              icon: const Icon(Icons.logout, color: Colors.redAccent, size: 20),
+              tooltip: 'Cerrar sesión',
+              onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const PantallaLogin())),
+            ),
+            const SizedBox(width: 4),
+            const Text("CÁM", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white70)),
+            Transform.scale(
+              scale: 0.78,
+              child: Switch(
+                value: _camaraActiva,
+                activeColor: Colors.greenAccent,
+                onChanged: (v) {
+                  setState(() => _camaraActiva = v);
+                  try {
+                    html.window.localStorage['gg_camara_activa'] = v.toString();
+                  } catch (_) {}
+                  if (v) {
+                    _laserController.repeat(reverse: true);
+                  } else {
+                    _laserController.stop();
+                    _skuManualFocus.requestFocus();
+                  }
+                },
+              ),
+            ),
+          ],
         ),
-        title: const Text('Operaciones de Piso', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 16)),
+        titleSpacing: 0,
+        centerTitle: true,
+        title: const Text('Operaciones de Piso', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 14)),
         actions: [
-          const Center(child: Text("TRASVASE ", style: TextStyle(fontSize: 10))),
-          Switch(value: _modoTrasvase, onChanged: (v) => setState(() => _modoTrasvase = v), activeColor: Colors.blueAccent),
+          const Center(child: Text("TRASVASE", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white70))),
+          Transform.scale(
+            scale: 0.78,
+            child: Switch(value: _modoTrasvase, onChanged: (v) => setState(() => _modoTrasvase = v), activeColor: Colors.blueAccent),
+          ),
         ],
       ),
       body: Column(
@@ -435,13 +479,19 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                         ),
                       ],
                     )
-                  : const Center(
+                  : Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.videocam_off, size: 50, color: Colors.white24),
-                          SizedBox(height: 8),
-                          Text('Cámara en pausa\n(Modo alto rendimiento)', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 12)),
+                          const Icon(Icons.videocam_off, size: 50, color: Colors.white24),
+                          const SizedBox(height: 8),
+                          Text(
+                          _camaraActiva
+                              ? 'Cámara en pausa\n(Modo alto rendimiento)'
+                              : 'Cámara desactivada (Ahorro de RAM y Batería)\nListo para usar con escáner físico abajo',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
                         ],
                       ),
                     ),
@@ -453,6 +503,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
               height: 48,
               child: TextField(
                 controller: _skuController,
+                focusNode: _skuManualFocus,
                 decoration: InputDecoration(
                   hintText: _modoTrasvase ? 'Busca SKU o UPC para extraer...' : 'SKU / UPC Manual...',
                   filled: true,

@@ -36,6 +36,9 @@ class _PantallaLoginState extends State<PantallaLogin> {
   @override
   void initState() {
     super.initState();
+    _empleadoFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
     _cargarSucursalGuardada();
   }
 
@@ -156,6 +159,7 @@ class _PantallaLoginState extends State<PantallaLogin> {
 
   @override
   Widget build(BuildContext context) {
+    final bool tecladoAbierto = _empleadoFocus.hasFocus || MediaQuery.of(context).viewInsets.bottom > 0;
     return Scaffold(
       body: Container(
         width: double.infinity,
@@ -167,126 +171,129 @@ class _PantallaLoginState extends State<PantallaLogin> {
           children: [
             Center(
               child: SingleChildScrollView(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const SizedBox(height: 80),
-              const Icon(Icons.shield_moon, size: 100, color: Colors.amber),
-              const SizedBox(height: 10),
-              const Text('GOURMET GUARD', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 4, color: Colors.amber)),
-              const Text('Plataforma Multitienda', style: TextStyle(color: Colors.white54, letterSpacing: 2)),
-              const SizedBox(height: 40),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 40),
-                child: Row(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Expanded(
-                      flex: 1,
-                      child: DropdownButtonFormField<String>(
-                        value: _zonaSeleccionada,
+                    const SizedBox(height: 60),
+                    const Icon(Icons.shield_moon, size: 100, color: Colors.amber),
+                    const SizedBox(height: 10),
+                    const Text('GOURMET GUARD', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 4, color: Colors.amber)),
+                    const Text('Plataforma Multitienda', style: TextStyle(color: Colors.white54, letterSpacing: 2)),
+                    const SizedBox(height: 40),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 40),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 1,
+                            child: DropdownButtonFormField<String>(
+                              value: _zonaSeleccionada,
+                              decoration: InputDecoration(
+                                labelText: 'Zona',
+                                filled: true,
+                                fillColor: Colors.black45,
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+                              ),
+                              dropdownColor: const Color(0xFF2C2C2C),
+                              items: const [DropdownMenuItem(value: '9', child: Text('Zona 9'))],
+                              onChanged: (val) {
+                                setState(() => _zonaSeleccionada = val!);
+                                _guardarPreferenciaDispositivo();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            flex: 2,
+                            child: DropdownButtonFormField<String>(
+                              value: _tiendaSeleccionada,
+                              decoration: InputDecoration(
+                                labelText: 'Sucursal',
+                                filled: true,
+                                fillColor: Colors.black45,
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+                              ),
+                              dropdownColor: const Color(0xFF2C2C2C),
+                              hint: const Text('Elige tu tienda...'),
+                              items: _tiendasZona9.entries
+                                  .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))))
+                                  .toList(),
+                              onChanged: (val) {
+                                setState(() => _tiendaSeleccionada = val);
+                                _guardarPreferenciaDispositivo();
+                                _empleadoFocus.requestFocus();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 40),
+                      child: TextField(
+                        controller: _numeroCtrl,
+                        focusNode: _empleadoFocus,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 2),
                         decoration: InputDecoration(
-                          labelText: 'Zona',
+                          hintText: '# DE EMPLEADO',
+                          hintStyle: const TextStyle(fontSize: 16, letterSpacing: 0, color: Colors.white54),
                           filled: true,
                           fillColor: Colors.black45,
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
                         ),
-                        dropdownColor: const Color(0xFF2C2C2C),
-                        items: const [DropdownMenuItem(value: '9', child: Text('Zona 9'))],
-                        onChanged: (val) {
-                          setState(() => _zonaSeleccionada = val!);
-                          _guardarPreferenciaDispositivo();
-                        },
+                        onSubmitted: (_) => _iniciarSesion(),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
-                      child: DropdownButtonFormField<String>(
-                        value: _tiendaSeleccionada,
-                        decoration: InputDecoration(
-                          labelText: 'Sucursal',
-                          filled: true,
-                          fillColor: Colors.black45,
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-                        ),
-                        dropdownColor: const Color(0xFF2C2C2C),
-                        hint: const Text('Elige tu tienda...'),
-                        items: _tiendasZona9.entries
-                            .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))))
-                            .toList(),
-                        onChanged: (val) {
-                          setState(() => _tiendaSeleccionada = val);
-                          _guardarPreferenciaDispositivo();
-                          _empleadoFocus.requestFocus();
-                        },
-                      ),
-                    ),
+                    const SizedBox(height: 30),
+                    _cargando
+                        ? const CircularProgressIndicator(color: Colors.amber)
+                        : ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 15),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                            ),
+                            icon: const Icon(Icons.login, size: 24),
+                            label: const Text('INGRESAR', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            onPressed: _iniciarSesion,
+                          ),
+                    const SizedBox(height: 60),
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 40),
-                child: TextField(
-                  controller: _numeroCtrl,
-                  focusNode: _empleadoFocus,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 2),
-                  decoration: InputDecoration(
-                    hintText: '# DE EMPLEADO',
-                    hintStyle: const TextStyle(fontSize: 16, letterSpacing: 0, color: Colors.white54),
-                    filled: true,
-                    fillColor: Colors.black45,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+            ),
+            if (!tecladoAbierto) ...[
+              Positioned(
+                left: 16,
+                bottom: 12,
+                child: Text(
+                  'Para Sofia',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.08),
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic,
+                    letterSpacing: 1.2,
                   ),
-                  onSubmitted: (_) => _iniciarSesion(),
                 ),
               ),
-              const SizedBox(height: 30),
-              _cargando
-                  ? const CircularProgressIndicator(color: Colors.amber)
-                  : ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.amber,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 15),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                      ),
-                      icon: const Icon(Icons.login, size: 24),
-                      label: const Text('INGRESAR', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      onPressed: _iniciarSesion,
-                    ),
-              const SizedBox(height: 80),
+              const Positioned(
+                right: 16,
+                bottom: 12,
+                child: Text(
+                  'Por: DJTAPIAB',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+              ),
             ],
-          ),
-            ),
-            Positioned(
-              left: 16,
-              bottom: 12,
-              child: Text(
-                'Para Sofia',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.08),
-                  fontSize: 11,
-                  fontStyle: FontStyle.italic,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-            const Positioned(
-              right: 16,
-              bottom: 12,
-              child: Text(
-                'Por: DJTAPIAB',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
           ],
         ),
       ),
