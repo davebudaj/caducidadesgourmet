@@ -6,6 +6,8 @@ import 'package:universal_html/html.dart' as html;
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 
 class PantallaAdmin extends StatefulWidget {
   final String idTiendaGlobal;
@@ -38,6 +40,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   String _ultimaCargaVentas = "Ventas sin cargar";
   String _ultimoBackup = "Sin respaldo reciente";
   final Set<String> _ramasContraidas = {};
+  List<String> _rutasConHijosActuales = [];
 
   @override
   void initState() {
@@ -438,6 +441,192 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     );
   }
 
+  void _renombrarUbicacionDialog(QueryDocumentSnapshot docActual, List<QueryDocumentSnapshot> todosDocsUbicaciones) {
+    String rutaVieja = docActual['nombre'].toString();
+    List<String> niveles = rutaVieja.contains(' > ') ? rutaVieja.split(' > ') : [rutaVieja];
+    String nombreNodoActual = niveles.last;
+    String prefijoPadre = niveles.length > 1 ? niveles.sublist(0, niveles.length - 1).join(' > ') : '';
+
+    final TextEditingController renameCtrl = TextEditingController(text: nombreNodoActual);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.amber, width: 1.5)),
+        title: const Row(
+          children: [
+            Icon(Icons.edit_location_alt, color: Colors.amber, size: 22),
+            SizedBox(width: 8),
+            Expanded(child: Text('Renombrar Ubicación', style: TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold))),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (prefijoPadre.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Text('Ruta base: ${prefijoPadre.replaceAll(' > ', ' ➔ ')}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+            const Text('El cambio actualizará este mueble, sus sub-niveles y todos los lotes guardados en él:', style: TextStyle(color: Colors.white70, fontSize: 11)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: renameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Nuevo nombre',
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+            icon: const Icon(Icons.save, size: 18),
+            label: const Text('GUARDAR CAMBIO', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              String nuevoTexto = renameCtrl.text.trim().toUpperCase();
+              if (nuevoTexto.isEmpty) return;
+              Navigator.pop(ctx);
+
+              String rutaNueva = prefijoPadre.isNotEmpty ? '$prefijoPadre > $nuevoTexto' : nuevoTexto;
+              if (rutaNueva == rutaVieja) return;
+
+              setState(() {
+                _procesando = true;
+                _estado = 'Actualizando ubicación y migrando lotes vinculados...';
+              });
+
+              try {
+                String reemplazarPrefijo(String original) {
+                  if (original == rutaVieja) return rutaNueva;
+                  if (original.startsWith('$rutaVieja > ')) {
+                    return '$rutaNueva > ${original.substring(rutaVieja.length + 3)}';
+                  }
+                  return original;
+                }
+
+                WriteBatch batch = FirebaseFirestore.instance.batch();
+                int opCount = 0;
+                int lotesMigrados = 0;
+
+                Future<void> checkBatch() async {
+                  opCount++;
+                  if (opCount >= 400) {
+                    await batch.commit();
+                    batch = FirebaseFirestore.instance.batch();
+                    opCount = 0;
+                  }
+                }
+
+                // 1. Actualizar esta ubicación y sus sub-ramas en 'ubicaciones' (sin duplicar)
+                for (var uDoc in todosDocsUbicaciones) {
+                  String uNombre = uDoc['nombre'].toString();
+                  if (uNombre == rutaVieja || uNombre.startsWith('$rutaVieja > ')) {
+                    String uActualizado = reemplazarPrefijo(uNombre);
+                    batch.update(uDoc.reference, {'nombre': uActualizado});
+                    await checkBatch();
+                  }
+                }
+
+                // 2. Actualizar lotes en 'inventario_activo' (tanto ubicacion actual como ubicacionOrigen en carrito)
+                var invSnap = await _refTienda.collection('inventario_activo').get();
+                for (var iDoc in invSnap.docs) {
+                  var data = iDoc.data();
+                  String ubi = (data['ubicacion'] ?? '').toString();
+                  String ubiOrig = (data['ubicacionOrigen'] ?? '').toString();
+                  Map<String, dynamic> cambios = {};
+
+                  if (ubi == rutaVieja || ubi.startsWith('$rutaVieja > ')) {
+                    cambios['ubicacion'] = reemplazarPrefijo(ubi);
+                    lotesMigrados++;
+                  }
+                  if (ubiOrig == rutaVieja || ubiOrig.startsWith('$rutaVieja > ')) {
+                    cambios['ubicacionOrigen'] = reemplazarPrefijo(ubiOrig);
+                  }
+                  if (cambios.isNotEmpty) {
+                    batch.update(iDoc.reference, cambios);
+                    await checkBatch();
+                  }
+                }
+
+                // 3. Actualizar misiones en 'misiones_auditoria'
+                var misSnap = await _refTienda.collection('misiones_auditoria').get();
+                for (var mDoc in misSnap.docs) {
+                  var data = mDoc.data();
+                  String ubi = (data['ubicacion'] ?? '').toString();
+                  Map<String, dynamic> cambios = {};
+
+                  if (ubi == rutaVieja || ubi.startsWith('$rutaVieja > ')) {
+                    cambios['ubicacion'] = reemplazarPrefijo(ubi);
+                  }
+                  if (data['otrasUbicaciones'] is List) {
+                    List<String> listaOtras = (data['otrasUbicaciones'] as List).map((e) => e.toString()).toList();
+                    bool cambioEnLista = false;
+                    List<String> nuevaLista = listaOtras.map((u) {
+                      if (u == rutaVieja || u.startsWith('$rutaVieja > ')) {
+                        cambioEnLista = true;
+                        return reemplazarPrefijo(u);
+                      }
+                      return u;
+                    }).toList();
+                    if (cambioEnLista) cambios['otrasUbicaciones'] = nuevaLista;
+                  }
+                  if (cambios.isNotEmpty) {
+                    batch.update(mDoc.reference, cambios);
+                    await checkBatch();
+                  }
+                }
+
+                // 4. Actualizar registros en 'historial_tratamientos'
+                var histSnap = await _refTienda.collection('historial_tratamientos').get();
+                for (var hDoc in histSnap.docs) {
+                  var data = hDoc.data();
+                  String ubi = (data['ubicacion'] ?? '').toString();
+                  if (ubi == rutaVieja || ubi.startsWith('$rutaVieja > ')) {
+                    batch.update(hDoc.reference, {'ubicacion': reemplazarPrefijo(ubi)});
+                    await checkBatch();
+                  }
+                }
+
+                if (opCount > 0) await batch.commit();
+
+                setState(() {
+                  if (_ramasContraidas.contains(rutaVieja)) {
+                    _ramasContraidas.remove(rutaVieja);
+                    _ramasContraidas.add(rutaNueva);
+                  }
+                  _procesando = false;
+                  _estado = '✅ Ubicación renombrada a "$rutaNueva" ($lotesMigrados lotes sincronizados).';
+                });
+
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('✅ Ubicación renombrada y $lotesMigrados lote(s) actualizados sin perder datos.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                setState(() {
+                  _procesando = false;
+                  _estado = 'Error al renombrar ubicación: $e';
+                });
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   void _confirmarEliminarRama(QueryDocumentSnapshot docActual, List<QueryDocumentSnapshot> todosDocs) {
     String ruta = docActual['nombre'].toString();
     var subRamas = todosDocs.where((d) => d['nombre'].toString().startsWith('$ruta > ')).toList();
@@ -492,19 +681,68 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   }
 
   void _abrirSelectorImpresionQRs() async {
-    var snap = await _refTienda.collection('ubicaciones').orderBy('nombre').get();
+    var snap = await _refTienda.collection('ubicaciones').get();
     List<String> todas = snap.docs
         .map((d) => d['nombre'].toString())
         .where((n) => n != 'EN TRÁNSITO')
         .toList();
 
+    todas = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(todas);
+
     if (!mounted) return;
     Set<String> elegidas = {};
+    Set<String> contraidasModal = {};
+    String? filtroAreaModal;
+    String? ultimaRutaClick;
+
+    // Devuelve las sub-ubicaciones finales (hojas) debajo de una rama padre
+    List<String> obtenerHojasDeRama(String rutaPadre) {
+      var subRamas = todas.where((otra) => otra.startsWith('$rutaPadre > ')).toList();
+      if (subRamas.isEmpty) return [rutaPadre];
+      return subRamas.where((s) => !todas.any((otra) => otra.startsWith('$s > '))).toList();
+    }
+
+    // Calcula el estado del Checkbox: false (nada), true (todo seleccionado), null (selección parcial [-])
+    bool? estadoCheckUbicacion(String u) {
+      bool tieneHijos = todas.any((otra) => otra.startsWith('$u > '));
+      if (!tieneHijos) {
+        return elegidas.contains(u);
+      }
+      List<String> hojas = obtenerHojasDeRama(u);
+      int seleccionados = hojas.where((h) => elegidas.contains(h)).length;
+      if (seleccionados == 0 && !elegidas.contains(u)) return false;
+      if (seleccionados == hojas.length) return true;
+      return null; // Selección parcial [-]
+    }
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) {
+          List<String> filtradasPorArea = todas.where((u) {
+            if (filtroAreaModal == null) return true;
+            String raiz = JerarquiaUbicacionHelper.descomponerRuta(u).first.toUpperCase();
+            return raiz == filtroAreaModal;
+          }).toList();
+
+          List<String> hojasVistaActual = filtradasPorArea
+              .where((u) => !todas.any((otra) => otra.startsWith('$u > ')))
+              .toList();
+
+          int hojasSeleccionadasEnVista = hojasVistaActual.where((h) => elegidas.contains(h)).length;
+          bool? estadoGeneralVista = hojasVistaActual.isEmpty
+              ? false
+              : (hojasSeleccionadasEnVista == 0
+                  ? false
+                  : (hojasSeleccionadasEnVista == hojasVistaActual.length ? true : null));
+
+          List<String> visibles = filtradasPorArea.where((u) {
+            for (String c in contraidasModal) {
+              if (u.startsWith('$c > ')) return false;
+            }
+            return true;
+          }).toList();
+
           return AlertDialog(
             backgroundColor: const Color(0xFF1E1E1E),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 1.5)),
@@ -512,54 +750,223 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               children: [
                 Icon(Icons.print, color: Colors.amber, size: 22),
                 SizedBox(width: 8),
-                Expanded(child: Text('Seleccionar QRs para Imprimir / Descargar', style: TextStyle(color: Colors.amber, fontSize: 14, fontWeight: FontWeight.bold))),
+                Expanded(
+                  child: Text(
+                    'Seleccionar QRs para Imprimir / Descargar',
+                    style: TextStyle(color: Colors.amber, fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                ),
               ],
             ),
             content: SizedBox(
-              width: 480,
-              height: 380,
+              width: 520,
+              height: 440,
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.keyboard, size: 16, color: Colors.cyanAccent),
+                        SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Tip: Usa Shift + Click entre dos ubicaciones para seleccionar todo el rango de golpe.',
+                            style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          height: 38,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String?>(
+                              isExpanded: true,
+                              dropdownColor: const Color(0xFF2C2C2C),
+                              value: filtroAreaModal,
+                              items: const [
+                                DropdownMenuItem(value: null, child: Text('📍 Área: Todas (PISO / BODEGA / DISPLAY)', style: TextStyle(fontSize: 11, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                DropdownMenuItem(value: 'PISO', child: Text('🏪 PISO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                                DropdownMenuItem(value: 'BODEGA', child: Text('📦 BODEGA', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                                DropdownMenuItem(value: 'DISPLAY', child: Text('✨ DISPLAY', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                              ],
+                              onChanged: (val) => setModalState(() {
+                                filtroAreaModal = val;
+                                ultimaRutaClick = null;
+                              }),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      TextButton.icon(
+                        icon: Icon(contraidasModal.isEmpty ? Icons.unfold_less : Icons.unfold_more, size: 16, color: Colors.amber),
+                        label: Text(contraidasModal.isEmpty ? 'Contraer' : 'Expandir', style: const TextStyle(fontSize: 11, color: Colors.amber)),
+                        onPressed: () {
+                          setModalState(() {
+                            if (contraidasModal.isNotEmpty) {
+                              contraidasModal.clear();
+                            } else {
+                              for (String r in todas) {
+                                if (todas.any((otra) => otra.startsWith('$r > '))) {
+                                  contraidasModal.add(r);
+                                }
+                              }
+                            }
+                          });
+                        },
+                      ),
+                    ],
+                  ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('${elegidas.length} seleccionados', style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            tristate: true,
+                            activeColor: Colors.amber,
+                            checkColor: Colors.black,
+                            value: estadoGeneralVista,
+                            onChanged: (_) {
+                              setModalState(() {
+                                if (estadoGeneralVista == true) {
+                                  elegidas.removeAll(filtradasPorArea);
+                                } else {
+                                  elegidas.addAll(hojasVistaActual);
+                                }
+                              });
+                            },
+                          ),
+                          Text('${elegidas.length} seleccionados', style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
                       Row(
                         children: [
                           TextButton(
-                            onPressed: () => setModalState(() => elegidas.clear()),
-                            child: const Text('Ninguno', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                            onPressed: () => setModalState(() => elegidas.removeAll(filtradasPorArea)),
+                            child: const Text('Desmarcar vista', style: TextStyle(color: Colors.white54, fontSize: 11)),
                           ),
                           TextButton(
-                            onPressed: () => setModalState(() => elegidas.addAll(todas)),
-                            child: const Text('Seleccionar Todos', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                            onPressed: () => setModalState(() => elegidas.addAll(hojasVistaActual)),
+                            child: const Text('Seleccionar todos', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
                           ),
                         ],
                       ),
                     ],
                   ),
-                  const Divider(color: Colors.white24, height: 8),
+                  const Divider(color: Colors.white24, height: 6),
                   Expanded(
                     child: ListView.builder(
-                      itemCount: todas.length,
+                      itemCount: visibles.length,
                       itemBuilder: (c, i) {
-                        String u = todas[i];
-                        bool sel = elegidas.contains(u);
-                        return CheckboxListTile(
-                          dense: true,
-                          activeColor: Colors.amber,
-                          checkColor: Colors.black,
-                          value: sel,
-                          title: Text(u.replaceAll(' > ', ' ➔ '), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          onChanged: (v) {
-                            setModalState(() {
-                              if (v == true) {
-                                elegidas.add(u);
-                              } else {
-                                elegidas.remove(u);
+                        String u = visibles[i];
+                        List<String> niveles = JerarquiaUbicacionHelper.descomponerRuta(u);
+                        int prof = niveles.length >= 2 ? (niveles.length - 2) : 0;
+                        bool tieneHijos = todas.any((otra) => otra.startsWith('$u > '));
+                        bool estaContraido = contraidasModal.contains(u);
+                        bool? estadoActual = estadoCheckUbicacion(u);
+
+                        void toggleConSoporteShift() {
+                          bool isShift = HardwareKeyboard.instance.isShiftPressed;
+                          bool activar = (estadoActual != true);
+
+                          setModalState(() {
+                            if (isShift && ultimaRutaClick != null && visibles.contains(ultimaRutaClick)) {
+                              int idxA = visibles.indexOf(ultimaRutaClick!);
+                              int idxB = i;
+                              int ini = idxA < idxB ? idxA : idxB;
+                              int fin = idxA > idxB ? idxA : idxB;
+                              for (int k = ini; k <= fin; k++) {
+                                String rutaRango = visibles[k];
+                                List<String> objetivos = obtenerHojasDeRama(rutaRango);
+                                if (activar) {
+                                  elegidas.addAll(objetivos);
+                                } else {
+                                  elegidas.removeAll(objetivos);
+                                  elegidas.remove(rutaRango);
+                                }
                               }
-                            });
-                          },
+                            } else {
+                              if (tieneHijos) {
+                                List<String> hojasHijas = obtenerHojasDeRama(u);
+                                if (estadoActual == true) {
+                                  elegidas.removeAll(hojasHijas);
+                                  elegidas.remove(u);
+                                } else {
+                                  elegidas.addAll(hojasHijas);
+                                }
+                              } else {
+                                if (estadoActual == true) {
+                                  elegidas.remove(u);
+                                } else {
+                                  elegidas.add(u);
+                                }
+                              }
+                            }
+                            ultimaRutaClick = u;
+                          });
+                        }
+
+                        return Padding(
+                          padding: EdgeInsets.only(left: (prof * 16.0).clamp(0.0, 80.0)),
+                          child: ListTile(
+                            dense: true,
+                            visualDensity: const VisualDensity(vertical: -2),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                            leading: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (tieneHijos)
+                                  IconButton(
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                                    icon: Icon(estaContraido ? Icons.chevron_right : Icons.expand_more, color: Colors.amber, size: 18),
+                                    onPressed: () {
+                                      setModalState(() {
+                                        if (estaContraido) {
+                                          contraidasModal.remove(u);
+                                        } else {
+                                          contraidasModal.add(u);
+                                        }
+                                      });
+                                    },
+                                  )
+                                else
+                                  const SizedBox(width: 24),
+                                Checkbox(
+                                  tristate: true,
+                                  activeColor: Colors.amber,
+                                  checkColor: Colors.black,
+                                  value: estadoActual,
+                                  onChanged: (_) => toggleConSoporteShift(),
+                                ),
+                              ],
+                            ),
+                            title: Text(
+                              niveles.last,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: tieneHijos ? FontWeight.bold : FontWeight.normal,
+                                color: tieneHijos ? Colors.amberAccent : Colors.white,
+                              ),
+                            ),
+                            subtitle: Text(
+                              niveles.join(' ➔ '),
+                              style: const TextStyle(fontSize: 10, color: Colors.white54),
+                            ),
+                            onTap: toggleConSoporteShift,
+                          ),
                         );
                       },
                     ),
@@ -577,7 +984,8 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                     ? null
                     : () {
                         Navigator.pop(ctx);
-                        _generarPlantillaImprimibleQRs(elegidas.toList());
+                        List<String> ordenadasPorJerarquia = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(elegidas);
+                        _generarPlantillaImprimibleQRs(ordenadasPorJerarquia);
                       },
               ),
             ],
@@ -596,7 +1004,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         <div class="card">
           <div class="tienda">${widget.nombreTienda}</div>
           <img src="$urlQr" width="165" height="165" alt="QR" />
-          <div class="ruta">${u.replaceAll(' > ', ' ➔ ')}</div>
+          <div class="ruta">${JerarquiaUbicacionHelper.descomponerRuta(u).join(' ➔ ')}</div>
         </div>
       ''');
     }
@@ -994,14 +1402,14 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                   ),
                   const SizedBox(width: 6),
                   TextButton.icon(
-                    icon: const Icon(Icons.unfold_less, color: Colors.cyanAccent, size: 16),
-                    label: const Text('Contraer/Expandir', style: TextStyle(color: Colors.cyanAccent, fontSize: 11)),
+                    icon: Icon(_ramasContraidas.isEmpty ? Icons.unfold_less : Icons.unfold_more, color: Colors.cyanAccent, size: 16),
+                    label: Text(_ramasContraidas.isEmpty ? 'Contraer a 1er Nivel' : 'Expandir Todo', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
                     onPressed: () {
                       setState(() {
                         if (_ramasContraidas.isNotEmpty) {
                           _ramasContraidas.clear();
                         } else {
-                          _ramasContraidas.addAll(['ROOT_PISO', 'ROOT_BODEGA', 'ROOT_DISPLAY']);
+                          _ramasContraidas.addAll(_rutasConHijosActuales);
                         }
                       });
                     },
@@ -1075,14 +1483,13 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                     var docs = snapshot.data!.docs;
                     List<String> todasRutas = docs.map((d) => d['nombre'].toString()).toList();
 
-                    // Filtrar nodos cuyos padres estén contraídos
+                    _rutasConHijosActuales = todasRutas
+                        .where((r) => todasRutas.any((otra) => otra.startsWith('$r > ')))
+                        .toList();
+
+                    // Mostrar siempre las ubicaciones de 1er nivel; ocultar solo sub-niveles cuyo padre esté contraído
                     var docsVisibles = docs.where((doc) {
                       String ruta = doc['nombre'].toString();
-                      String upper = ruta.toUpperCase();
-                      if (upper.startsWith('PISO') && _ramasContraidas.contains('ROOT_PISO')) return false;
-                      if (upper.startsWith('BODEGA') && _ramasContraidas.contains('ROOT_BODEGA')) return false;
-                      if (upper.startsWith('DISPLAY') && _ramasContraidas.contains('ROOT_DISPLAY')) return false;
-
                       for (String contraida in _ramasContraidas) {
                         if (ruta.startsWith('$contraida > ')) return false;
                       }
@@ -1127,6 +1534,18 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                           child: ListTile(
                             dense: true,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                            onTap: tieneHijos
+                                ? () {
+                                    setState(() {
+                                      if (estaContraido) {
+                                        _ramasContraidas.remove(ruta);
+                                      } else {
+                                        _ramasContraidas.add(ruta);
+                                      }
+                                    });
+                                  }
+                                : null,
+                            onLongPress: () => _renombrarUbicacionDialog(doc, docs),
                             leading: InkWell(
                               onTap: tieneHijos
                                   ? () {

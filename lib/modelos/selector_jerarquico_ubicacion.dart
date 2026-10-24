@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 class JerarquiaUbicacionHelper {
-  // Convierte cualquier ubicación ("PISO MESA DE CAFES > NIVEL1" o "PISO > MESA > NIVEL1") en lista de niveles
   static List<String> descomponerRuta(String raw) {
     String limpia = raw.trim();
     if (limpia.isEmpty) return ['SIN UBICACIÓN'];
@@ -22,6 +21,50 @@ class JerarquiaUbicacionHelper {
   static String formatearRutaVisual(String? raw) {
     if (raw == null || raw.trim().isEmpty) return 'ND';
     return descomponerRuta(raw).join(' > ');
+  }
+
+  static int _prioridadArea(String area) {
+    String u = area.toUpperCase().trim();
+    if (u == 'PISO') return 0;
+    if (u == 'BODEGA') return 1;
+    if (u == 'DISPLAY') return 2;
+    return 3;
+  }
+
+  static int _compararTextoNatural(String a, String b) {
+    RegExp reg = RegExp(r'(\d+)|(\D+)');
+    var mA = reg.allMatches(a.toUpperCase()).map((m) => m.group(0)!).toList();
+    var mB = reg.allMatches(b.toUpperCase()).map((m) => m.group(0)!).toList();
+    int len = mA.length < mB.length ? mA.length : mB.length;
+    for (int i = 0; i < len; i++) {
+      int? nA = int.tryParse(mA[i]);
+      int? nB = int.tryParse(mB[i]);
+      int cmp = (nA != null && nB != null) ? nA.compareTo(nB) : mA[i].compareTo(mB[i]);
+      if (cmp != 0) return cmp;
+    }
+    return mA.length.compareTo(mB.length);
+  }
+
+  static int compararRutasJerarquicas(String rutaA, String rutaB) {
+    List<String> nivA = descomponerRuta(rutaA);
+    List<String> nivB = descomponerRuta(rutaB);
+
+    int prioA = _prioridadArea(nivA.first);
+    int prioB = _prioridadArea(nivB.first);
+    if (prioA != prioB) return prioA.compareTo(prioB);
+
+    int minLen = nivA.length < nivB.length ? nivA.length : nivB.length;
+    for (int i = 0; i < minLen; i++) {
+      int cmp = _compararTextoNatural(nivA[i], nivB[i]);
+      if (cmp != 0) return cmp;
+    }
+    return nivA.length.compareTo(nivB.length);
+  }
+
+  static List<String> ordenarRutasPorJerarquia(Iterable<String> rutas) {
+    List<String> lista = rutas.toList();
+    lista.sort(compararRutasJerarquicas);
+    return lista;
   }
 
   static bool coincideConPrefijoJerarquico(String rutaReal, List<String> nivelesSeleccionados) {
@@ -96,7 +139,6 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
   String? _resolverValorParaCallback() {
     if (_nivelesElegidos.isEmpty) return null;
 
-    // Buscar si existe una ruta exacta en la BD con estos niveles
     for (String r in widget.todasLasRutas) {
       List<String> nr = JerarquiaUbicacionHelper.descomponerRuta(r);
       if (nr.length == _nivelesElegidos.length) {
@@ -130,6 +172,11 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
       List<String> prefijo = _nivelesElegidos.take(nivelActual).toList();
       Set<String> opcionesSet = {};
 
+      if (nivelActual == 0) {
+        // Garantizar que siempre inicie con PISO, BODEGA, DISPLAY
+        opcionesSet.addAll(['PISO', 'BODEGA', 'DISPLAY']);
+      }
+
       for (var nr in rutasDescompuestas) {
         if (nr.length > nivelActual) {
           bool coincide = true;
@@ -145,7 +192,18 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
         }
       }
 
-      List<String> opciones = opcionesSet.toList()..sort();
+      List<String> opciones = opcionesSet.toList();
+      if (nivelActual == 0) {
+        opciones.sort((a, b) {
+          int pA = JerarquiaUbicacionHelper._prioridadArea(a);
+          int pB = JerarquiaUbicacionHelper._prioridadArea(b);
+          if (pA != pB) return pA.compareTo(pB);
+          return a.compareTo(b);
+        });
+      } else {
+        opciones.sort(JerarquiaUbicacionHelper._compararTextoNatural);
+      }
+
       if (opciones.isEmpty) break;
 
       String? valorActual = _nivelesElegidos.length > nivelActual ? _nivelesElegidos[nivelActual] : null;
@@ -154,22 +212,22 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
       }
 
       String etiquetaNivel = nivelActual == 0
-          ? '1. Área (Piso / Bodega / Display)'
+          ? '1. Área (PISO / BODEGA / DISPLAY)'
           : (nivelActual == 1 ? '2. Mueble / Ubicación' : '${nivelActual + 1}. Nivel / Cara / Entrepaño');
 
       int idxCopia = nivelActual;
 
       selectores.add(
         Padding(
-          padding: EdgeInsets.only(top: idxCopia == 0 ? 0 : 8),
+          padding: EdgeInsets.only(top: idxCopia == 0 ? 0 : 6),
           child: Container(
             height: 44,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              color: idxCopia == 0 ? Colors.blueAccent.withOpacity(0.12) : Colors.white10,
+              color: idxCopia == 0 ? Colors.white10 : Colors.blueAccent.withOpacity(0.10),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: valorActual != null ? Colors.amberAccent.withOpacity(0.7) : Colors.white24,
+                color: valorActual != null ? Colors.greenAccent.withOpacity(0.8) : Colors.white24,
               ),
             ),
             child: DropdownButtonHideUnderline(
@@ -184,10 +242,10 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
                     child: Text(
                       idxCopia == 0
                           ? widget.textoRaizVacio
-                          : (widget.permitirSeleccionParcial ? 'Todos los sub-niveles de ${_nivelesElegidos[idxCopia - 1]}' : 'Selecciona $etiquetaNivel...'),
+                          : (widget.permitirSeleccionParcial ? 'Todo ${_nivelesElegidos[idxCopia - 1]}' : 'Selecciona $etiquetaNivel...'),
                       style: TextStyle(
                         fontSize: 12,
-                        color: widget.permitirSeleccionParcial ? Colors.greenAccent : Colors.white54,
+                        color: idxCopia == 0 ? Colors.white54 : Colors.amberAccent,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -244,6 +302,15 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
       );
 
       if (valorActual == null) break;
+      // Si el nivel actual ya no tiene sub-ramas en las rutas existentes, terminamos de desplegar
+      bool tieneSubRamas = rutasDescompuestas.any((nr) {
+        if (nr.length <= nivelActual + 1) return false;
+        for (int i = 0; i <= nivelActual; i++) {
+          if (nr[i].toUpperCase() != _nivelesElegidos[i].toUpperCase()) return false;
+        }
+        return true;
+      });
+      if (!tieneSubRamas) break;
       nivelActual++;
     }
 

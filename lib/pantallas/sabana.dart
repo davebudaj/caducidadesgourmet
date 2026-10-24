@@ -24,7 +24,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String? _filtroRiesgoEspecial;
   String? _filtroTipoUbicacion;
   String? _filtroMueble;
-  int? _filtroMes = DateTime.now().month;
+  int? _filtroMes;
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -34,6 +34,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   
   bool _modoSeleccion = false;
   bool _filtroDescuadreSAP = false;
+  bool _filtrosOcultos = false;
   Set<String> _seleccionados = {};
   
   late Stream<QuerySnapshot> _inventarioStream; 
@@ -724,11 +725,37 @@ class PantallaDashboardState extends State<PantallaDashboard> {
 
           return Column(
             children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: const BoxDecoration(color: Colors.black, border: Border(bottom: BorderSide(color: Colors.white24, width: 1))),
-                child: Column(
-                  children: [
+              if (_filtrosOcultos)
+                InkWell(
+                  onTap: () => setState(() => _filtrosOcultos = false),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      border: Border(bottom: BorderSide(color: Colors.amber.withOpacity(0.6), width: 1.5)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber, size: 20),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Bajar Filtros y Buscador (${docsFiltrados.length} lotes)',
+                          style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.tune, color: Colors.amberAccent, size: 15),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  decoration: const BoxDecoration(color: Colors.black, border: Border(bottom: BorderSide(color: Colors.white24, width: 1))),
+                  child: Column(
+                    children: [
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -940,7 +967,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                       ),
                                       ..._nombresMeses.entries.map((e) => DropdownMenuItem<int?>(
                                             value: e.key,
-                                            child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 12)),
+                                            child: Text(e.value, style: const TextStyle(fontSize: 12)),
                                           )),
                                     ],
                                     onChanged: (v) => setState(() => _filtroMes = v),
@@ -983,7 +1010,29 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                           ),
                         ],
                       ],
-                    )
+                    ),
+                    const SizedBox(height: 8),
+                    InkWell(
+                      onTap: () => setState(() => _filtrosOcultos = true),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                            SizedBox(width: 4),
+                            Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),

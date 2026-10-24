@@ -26,10 +26,10 @@ class PantallaEscaner extends StatefulWidget {
 
 class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProviderStateMixin {
   final TextEditingController _skuController = TextEditingController();
+  final FocusNode _skuManualFocus = FocusNode();
   String? _ubicacionDestino;
   bool _modoTrasvase = false;
   bool _camaraActiva = true;
-  final FocusNode _skuManualFocus = FocusNode();
 
   late AnimationController _laserController;
   late Animation<double> _laserAnimation;
@@ -119,116 +119,694 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
     }
   }
 
+  // Si se escanea un QR de un mueble padre que tiene sub-niveles (Macro-QR), permite elegir el nivel/entrepaño exacto
+  Future<String?> _resolverMacroQR(String muebleEscaneado, List<String> todasUbis, {bool permitirExtraerTodo = true}) async {
+    List<String> subRamas = todasUbis.where((u) => u.startsWith('$muebleEscaneado > ')).toList();
+    List<String> hojas = subRamas.where((u) => !todasUbis.any((otra) => otra.startsWith('$u > '))).toList();
+    hojas = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(hojas);
+
+    if (hojas.isEmpty) return muebleEscaneado;
+
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 2)),
+        title: Text('📍 ${JerarquiaUbicacionHelper.formatearRutaVisual(muebleEscaneado)}', style: const TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Selecciona el nivel / entrepaño exacto:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+              const SizedBox(height: 10),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: hojas.length,
+                  itemBuilder: (c, idx) {
+                    String h = hojas[idx];
+                    String etiquetaHija = h.substring(muebleEscaneado.length + 3).replaceAll(' > ', ' ➔ ');
+                    return Card(
+                      color: Colors.white10,
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.subdirectory_arrow_right, color: Colors.greenAccent, size: 18),
+                        title: Text(etiquetaHija, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        trailing: const Icon(Icons.arrow_forward_ios, size: 13, color: Colors.amber),
+                        onTap: () => Navigator.pop(ctx, h),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+          ),
+          if (permitirExtraerTodo)
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+              icon: const Icon(Icons.outbox, size: 16),
+              label: const Text('EXTRAER DE TODO EL MUEBLE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              onPressed: () => Navigator.pop(ctx, '__EXTRAER_PADRE__'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<int?> _pedirCantidadManualTrasvase(int actual, int maximo, String descripcion) async {
+    TextEditingController ctrl = TextEditingController(text: actual > 0 ? actual.toString() : '');
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2C2C2C),
+        title: Text(descripcion, style: const TextStyle(color: Colors.amber, fontSize: 14, fontWeight: FontWeight.bold), maxLines: 2),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: 'Piezas a trasvasar (Máx: $maximo)',
+            filled: true,
+            fillColor: Colors.black45,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+            onPressed: () {
+              int val = int.tryParse(ctrl.text.trim()) ?? 0;
+              Navigator.pop(ctx, val.clamp(0, maximo));
+            },
+            child: const Text('ACEPTAR', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // MODAL DE TRASVASE RÁPIDO DIRECTO (UBICACIÓN A UBICACIÓN SIN PASAR POR EL CARRITO)
+  Future<void> _mostrarDialogoTrasvaseRapido(String skuOficial) async {
+    setState(() => _enSubPantalla = true);
+    try {
+      var results = await Future.wait([
+        _refInv.where('sku', isEqualTo: skuOficial).get(),
+        _refUbi.orderBy('nombre').get(),
+      ]);
+
+      var invSnap = results[0];
+      var ubiSnap = results[1];
+
+      var lotesDisponibles = invSnap.docs.where((d) {
+        String u = (d.data()['ubicacion'] ?? '').toString();
+        int cant = (d.data()['cantidad'] ?? 0) as int;
+        return u != kUbicacionTransito && cant > 0;
+      }).toList();
+
+      if (lotesDisponibles.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('⚠️ No hay lotes activos del SKU $skuOficial disponibles para trasvasar.'),
+              backgroundColor: Colors.orange.shade800,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Ordenar lotes por FIFO (más próximo a caducar primero)
+      lotesDisponibles.sort((a, b) {
+        Timestamp tA = a.data()['fechaCaducidad'] ?? Timestamp.now();
+        Timestamp tB = b.data()['fechaCaducidad'] ?? Timestamp.now();
+        return tA.compareTo(tB);
+      });
+
+      List<String> todasUbis = ubiSnap.docs.map((d) => d['nombre'].toString()).where((n) => n != kUbicacionTransito).toList();
+      List<String> ubicacionesHoja = todasUbis.where((u) => !todasUbis.any((otra) => otra.startsWith('$u > '))).toList();
+      ubicacionesHoja = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(ubicacionesHoja);
+
+      String? destinoModal = (_ubicacionDestino != null && _ubicacionDestino != 'Sin anclar') ? _ubicacionDestino : null;
+      if (destinoModal != null && !ubicacionesHoja.contains(destinoModal)) {
+        ubicacionesHoja.add(destinoModal);
+      }
+
+      String descProducto = (lotesDisponibles.first.data()['descripcion'] ?? skuOficial).toString();
+      Map<String, int> cantidadesSeleccionadas = {};
+
+      // Si solo existe 1 lote en otra ubicación, pre-seleccionamos 1 pieza para agilizar aún más
+      if (lotesDisponibles.length == 1) {
+        String uUnica = (lotesDisponibles.first.data()['ubicacion'] ?? '').toString();
+        if (uUnica != destinoModal) {
+          cantidadesSeleccionadas[lotesDisponibles.first.id] = 1;
+        }
+      }
+
+      bool ejecutando = false;
+
+      if (!mounted) return;
+
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => StatefulBuilder(
+          builder: (context, setModalState) {
+            int totalPiezas = 0;
+            int totalLotes = 0;
+            for (var doc in lotesDisponibles) {
+              String uOrig = (doc.data()['ubicacion'] ?? '').toString();
+              if (destinoModal != null && uOrig == destinoModal) continue;
+              int c = cantidadesSeleccionadas[doc.id] ?? 0;
+              if (c > 0) {
+                totalPiezas += c;
+                totalLotes++;
+              }
+            }
+
+            Future<void> escanearQRDestinoDentroDeModal() async {
+              String? qrRaw = await Navigator.push<String>(
+                context,
+                MaterialPageRoute(builder: (_) => const PantallaEscanerQRUbicacion()),
+              );
+              if (qrRaw == null || qrRaw.trim().isEmpty) return;
+              String limpio = qrRaw.trim();
+              String rutaCandidata = limpio.startsWith('LOC:') ? limpio.substring(4).trim() : limpio;
+
+              String? hojaResuelta = await _resolverMacroQR(rutaCandidata, todasUbis, permitirExtraerTodo: false);
+              if (hojaResuelta != null && hojaResuelta != '__EXTRAER_PADRE__') {
+                setModalState(() {
+                  if (!ubicacionesHoja.contains(hojaResuelta)) {
+                    ubicacionesHoja.add(hojaResuelta);
+                  }
+                  destinoModal = hojaResuelta;
+                  // Si algún lote estaba en la misma ubicación recién elegida, poner su cantidad en 0
+                  for (var doc in lotesDisponibles) {
+                    if ((doc.data()['ubicacion'] ?? '') == destinoModal) {
+                      cantidadesSeleccionadas[doc.id] = 0;
+                    }
+                  }
+                });
+              }
+            }
+
+            Future<void> confirmarTrasvaseDirecto() async {
+              if (destinoModal == null || totalPiezas <= 0 || ejecutando) return;
+              setModalState(() => ejecutando = true);
+
+              try {
+                var destinoSnap = await _refInv
+                    .where('sku', isEqualTo: skuOficial)
+                    .where('ubicacion', isEqualTo: destinoModal)
+                    .get();
+
+                // Mapa por fecha (YYYY-MM-DD) para fusionar limpiamente si llegan lotes con la misma caducidad al destino
+                Map<String, Map<String, dynamic>> lotesEnDestinoPorFecha = {};
+                for (var d in destinoSnap.docs) {
+                  DateTime f = (d.data()['fechaCaducidad'] as Timestamp).toDate();
+                  String keyFecha = "${f.year}-${f.month}-${f.day}";
+                  lotesEnDestinoPorFecha[keyFecha] = {
+                    'ref': d.reference,
+                    'cantidad': (d.data()['cantidad'] ?? 0) as int,
+                  };
+                }
+
+                var misionesSnap = await FirebaseFirestore.instance
+                    .collection('tiendas')
+                    .doc(widget.idTiendaGlobal)
+                    .collection('misiones_auditoria')
+                    .where('estado', isEqualTo: 'pendiente')
+                    .where('sku', isEqualTo: skuOficial)
+                    .get();
+
+                var batch = FirebaseFirestore.instance.batch();
+
+                for (var docOrigen in lotesDisponibles) {
+                  int cantMover = cantidadesSeleccionadas[docOrigen.id] ?? 0;
+                  if (cantMover <= 0) continue;
+
+                  var dataOrig = docOrigen.data();
+                  String ubiOrig = (dataOrig['ubicacion'] ?? '').toString();
+                  if (ubiOrig == destinoModal) continue;
+
+                  int cantActual = (dataOrig['cantidad'] ?? 0) as int;
+                  if (cantMover > cantActual) cantMover = cantActual;
+
+                  DateTime fCad = (dataOrig['fechaCaducidad'] as Timestamp).toDate();
+                  String keyFecha = "${fCad.year}-${fCad.month}-${fCad.day}";
+
+                  // 1. Restar o eliminar del lote origen
+                  if (cantActual <= cantMover) {
+                    batch.delete(docOrigen.reference);
+                  } else {
+                    batch.update(docOrigen.reference, {'cantidad': cantActual - cantMover});
+                  }
+
+                  // 2. Sumar o crear directamente en la ubicación destino
+                  if (lotesEnDestinoPorFecha.containsKey(keyFecha)) {
+                    int nuevaCantDestino = (lotesEnDestinoPorFecha[keyFecha]!['cantidad'] as int) + cantMover;
+                    lotesEnDestinoPorFecha[keyFecha]!['cantidad'] = nuevaCantDestino;
+                    batch.update(
+                      lotesEnDestinoPorFecha[keyFecha]!['ref'] as DocumentReference,
+                      {'cantidad': nuevaCantDestino},
+                    );
+                  } else {
+                    var nuevoRef = _refInv.doc();
+                    var nuevoMapa = Map<String, dynamic>.from(dataOrig);
+                    nuevoMapa['cantidad'] = cantMover;
+                    nuevoMapa['ubicacion'] = destinoModal;
+                    nuevoMapa['fechaCaptura'] = FieldValue.serverTimestamp();
+                    nuevoMapa['capturista'] = widget.usuarioRegistra;
+                    batch.set(nuevoRef, nuevoMapa);
+
+                    lotesEnDestinoPorFecha[keyFecha] = {
+                      'ref': nuevoRef,
+                      'cantidad': cantMover,
+                    };
+                  }
+
+                  // 3. Conciliar misiones activas de este lote
+                  for (var mDoc in misionesSnap.docs) {
+                    var mData = mDoc.data();
+                    if ((mData['ubicacion'] ?? '') != ubiOrig) continue;
+                    String msg = (mData['mensaje'] ?? '').toString();
+
+                    if (msg.contains('90 DÍAS') && !destinoModal!.toUpperCase().contains('BODEGA')) {
+                      batch.update(mDoc.reference, {
+                        'estado': 'completada',
+                        'completadaPor': '${widget.usuarioRegistra} (Trasvase Rápido)',
+                        'accionRealizada': 'trasvase_rapido',
+                      });
+                    } else if (cantActual <= cantMover) {
+                      batch.update(mDoc.reference, {'ubicacion': destinoModal});
+                    }
+                  }
+                }
+
+                await batch.commit();
+
+                if (mounted) {
+                  setState(() => _ubicacionDestino = destinoModal);
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        '⚡ Trasvase Rápido: $totalPiezas pza(s) movidas directo a ${JerarquiaUbicacionHelper.formatearRutaVisual(destinoModal)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      backgroundColor: Colors.green.shade700,
+                    ),
+                  );
+                }
+              } catch (e) {
+                setModalState(() => ejecutando = false);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error en trasvase rápido: $e'), backgroundColor: Colors.redAccent),
+                  );
+                }
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.blueAccent, width: 2)),
+              titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              contentPadding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.bolt, color: Colors.amber, size: 22),
+                      SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Trasvase Rápido Directo',
+                          style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(descProducto, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  Text('SKU: $skuOficial', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                ],
+              ),
+              content: SizedBox(
+                width: 500,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Divider(color: Colors.white24, height: 12),
+                      // PASO 1: UBICACIÓN DESTINO (PRE-ANCLADA O PARA ELEGIR/ESCANEAR AL MOMENTO)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            destinoModal != null ? '🎯 1. Ubicación Destino (Anclada):' : '🎯 1. Selecciona o Escanea el Destino:',
+                            style: TextStyle(
+                              color: destinoModal != null ? Colors.greenAccent : Colors.amberAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.cyanAccent,
+                              side: const BorderSide(color: Colors.cyanAccent),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            icon: const Icon(Icons.qr_code_scanner, size: 15),
+                            label: const Text('Escanear QR Destino', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                            onPressed: escanearQRDestinoDentroDeModal,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      SelectorJerarquicoUbicacion(
+                        todasLasRutas: ubicacionesHoja,
+                        rutaSeleccionada: destinoModal,
+                        permitirSeleccionParcial: false,
+                        textoRaizVacio: '📍 Elige Área Destino (PISO, BODEGA o DISPLAY)...',
+                        onRutaCambiada: (val) {
+                          setModalState(() {
+                            destinoModal = val;
+                            for (var doc in lotesDisponibles) {
+                              if ((doc.data()['ubicacion'] ?? '') == destinoModal) {
+                                cantidadesSeleccionadas[doc.id] = 0;
+                              }
+                            }
+                          });
+                        },
+                      ),
+                      if (destinoModal != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.greenAccent.withOpacity(0.6)),
+                            ),
+                            child: Text(
+                              '✅ Se dejará en: ${JerarquiaUbicacionHelper.formatearRutaVisual(destinoModal)}',
+                              style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      const Divider(color: Colors.white24, height: 18),
+                      // PASO 2: SELECCIONAR DE QUÉ LOTE Y QUÉ CANTIDAD EXTRAER
+                      const Text(
+                        '📦 2. Selecciona de qué ubicación/lote y qué cantidad deseas mover:',
+                        style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                      const SizedBox(height: 6),
+                      ...lotesDisponibles.map((doc) {
+                        var d = doc.data();
+                        String docId = doc.id;
+                        String ubiLote = (d['ubicacion'] ?? 'SIN UBICACIÓN').toString();
+                        int maxDisp = (d['cantidad'] ?? 0) as int;
+                        DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+                        int dias = cad.difference(DateTime.now()).inDays;
+                        String fCad = "${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}";
+
+                        bool esMismoDestino = (destinoModal != null && ubiLote == destinoModal);
+                        int cantElegida = esMismoDestino ? 0 : (cantidadesSeleccionadas[docId] ?? 0);
+                        bool activo = cantElegida > 0;
+
+                        return Card(
+                          color: esMismoDestino
+                              ? Colors.white.withOpacity(0.04)
+                              : (activo ? Colors.blueAccent.withOpacity(0.22) : Colors.white10),
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: BorderSide(
+                              color: esMismoDestino
+                                  ? Colors.white12
+                                  : (activo ? Colors.blueAccent : Colors.white24),
+                              width: activo ? 1.8 : 1,
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    if (!esMismoDestino)
+                                      Checkbox(
+                                        visualDensity: VisualDensity.compact,
+                                        value: activo,
+                                        activeColor: Colors.blueAccent,
+                                        onChanged: (v) {
+                                          setModalState(() {
+                                            cantidadesSeleccionadas[docId] = (v == true) ? maxDisp : 0;
+                                          });
+                                        },
+                                      ),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '📍 ${JerarquiaUbicacionHelper.formatearRutaVisual(ubiLote)}',
+                                            style: TextStyle(
+                                              color: esMismoDestino ? Colors.white54 : Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            '📅 Cad: $fCad ($dias d)  •  📦 Disponible: $maxDisp pzas',
+                                            style: TextStyle(
+                                              color: dias <= 15 ? Colors.redAccent : Colors.amberAccent,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (esMismoDestino)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 4, left: 4),
+                                    child: Text(
+                                      'ℹ️ Este lote ya se encuentra en la ubicación destino seleccionada.',
+                                      style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontStyle: FontStyle.italic),
+                                    ),
+                                  )
+                                else
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        InkWell(
+                                          onTap: () => setModalState(() => cantidadesSeleccionadas[docId] = maxDisp),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                            decoration: BoxDecoration(
+                                              color: cantElegida == maxDisp ? Colors.amber : Colors.amber.withOpacity(0.15),
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: Colors.amber),
+                                            ),
+                                            child: Text(
+                                              'TODO ($maxDisp)',
+                                              style: TextStyle(
+                                                color: cantElegida == maxDisp ? Colors.black : Colors.amber,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 26),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          onPressed: cantElegida > 0
+                                              ? () => setModalState(() => cantidadesSeleccionadas[docId] = cantElegida - 1)
+                                              : null,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        InkWell(
+                                          onTap: () async {
+                                            int? manual = await _pedirCantidadManualTrasvase(cantElegida, maxDisp, descProducto);
+                                            if (manual != null) {
+                                              setModalState(() => cantidadesSeleccionadas[docId] = manual);
+                                            }
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black54,
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: Colors.white24),
+                                            ),
+                                            child: Text(
+                                              cantElegida.toString(),
+                                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 26),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          onPressed: cantElegida < maxDisp
+                                              ? () => setModalState(() => cantidadesSeleccionadas[docId] = cantElegida + 1)
+                                              : null,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: ejecutando ? null : () => Navigator.pop(ctx),
+                  child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueAccent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  ),
+                  icon: ejecutando
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.bolt, size: 18),
+                  label: Text(
+                    ejecutando
+                        ? 'MOVIENDO...'
+                        : (destinoModal == null
+                            ? 'ELIGE DESTINO ARRIBA'
+                            : 'MOVER A DESTINO ($totalLotes lote${totalLotes == 1 ? '' : 's'} • $totalPiezas pzas)'),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                  ),
+                  onPressed: (destinoModal == null || totalPiezas <= 0 || ejecutando) ? null : confirmarTrasvaseDirecto,
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _enSubPantalla = false);
+        if (!_camaraActiva) _skuManualFocus.requestFocus();
+      }
+    }
+  }
+
   void _procesarEscaneo(String codigo) async {
     String codigoLimpio = codigo.trim();
 
     if (codigoLimpio.startsWith('LOC:')) {
-      String muebleEscaneado = codigoLimpio.substring(4);
+      String muebleEscaneado = codigoLimpio.substring(4).trim();
       var ubiSnap = await _refUbi.orderBy('nombre').get();
       List<String> todasUbis = ubiSnap.docs.map((d) => d['nombre'].toString()).toList();
-      // Buscar si este QR tiene sub-niveles hijos (hojas finales)
-      List<String> subRamas = todasUbis.where((u) => u.startsWith('$muebleEscaneado > ')).toList();
-      List<String> hojas = subRamas.where((u) => !todasUbis.any((otra) => otra.startsWith('$u > '))).toList();
 
-      if (hojas.isNotEmpty) {
-        String? subElegida = await showDialog<String>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: const Color(0xFF1E1E1E),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 2)),
-            title: Text('📍 ${muebleEscaneado.replaceAll(' > ', ' ➔ ')}', style: const TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold)),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Selecciona el nivel / entrepaño exacto donde estás trabajando:', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  const SizedBox(height: 10),
-                  Flexible(
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: hojas.length,
-                      itemBuilder: (c, idx) {
-                        String h = hojas[idx];
-                        String etiquetaHija = h.substring(muebleEscaneado.length + 3).replaceAll(' > ', ' ➔ ');
-                        return Card(
-                          color: Colors.white10,
-                          margin: const EdgeInsets.symmetric(vertical: 3),
-                          child: ListTile(
-                            dense: true,
-                            leading: const Icon(Icons.subdirectory_arrow_right, color: Colors.greenAccent, size: 18),
-                            title: Text(etiquetaHija, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                            trailing: const Icon(Icons.arrow_forward_ios, size: 13, color: Colors.amber),
-                            onTap: () => Navigator.pop(ctx, h),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
-              ),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
-                icon: const Icon(Icons.outbox, size: 16),
-                label: const Text('EXTRAER DE TODO EL MUEBLE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                onPressed: () => Navigator.pop(ctx, '__EXTRAER_PADRE__'),
-              ),
-            ],
-          ),
-        );
-
-        if (subElegida == null) {
-          if (mounted) setState(() => _bloquearEscaneo = false);
-          return;
-        } else if (subElegida == '__EXTRAER_PADRE__') {
-          await _irATrasvaseMasivo(ubicacionInicial: muebleEscaneado);
-          if (mounted) setState(() => _bloquearEscaneo = false);
-          return;
-        } else {
-          muebleEscaneado = subElegida;
-        }
+      String? resuelto = await _resolverMacroQR(muebleEscaneado, todasUbis, permitirExtraerTodo: true);
+      if (resuelto == null) {
+        if (mounted) setState(() => _bloquearEscaneo = false);
+        return;
+      } else if (resuelto == '__EXTRAER_PADRE__') {
+        await _irATrasvaseMasivo(ubicacionInicial: muebleEscaneado);
+        if (mounted) setState(() => _bloquearEscaneo = false);
+        return;
+      } else {
+        muebleEscaneado = resuelto;
       }
+
+      if (!mounted) return;
 
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
           backgroundColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.amber, width: 2)),
-          title: Text('Mueble: $muebleEscaneado', style: const TextStyle(color: Colors.amber, fontSize: 16, fontWeight: FontWeight.bold)),
-          content: const Text('¿Qué acción deseas realizar con esta ubicación?', style: TextStyle(color: Colors.white70)),
+          title: Text('📍 ${JerarquiaUbicacionHelper.formatearRutaVisual(muebleEscaneado)}', style: const TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold)),
+          content: Text(
+            _modoTrasvase
+                ? 'Modo Trasvase Rápido activo: ¿Deseas anclar esta ubicación como destino para escanear los productos que dejarás aquí?'
+                : '¿Qué acción deseas realizar con esta ubicación?',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
           actions: [
-            TextButton(
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.greenAccent,
+                foregroundColor: Colors.black,
+              ),
+              icon: const Icon(Icons.push_pin, size: 18),
+              label: Text(
+                _modoTrasvase ? 'ANCLAR DESTINO (TRASVASE RÁPIDO)' : 'ANCLAR DESTINO AQUÍ',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+              ),
               onPressed: () {
                 Navigator.pop(context);
                 setState(() {
                   _ubicacionDestino = muebleEscaneado;
                   _skuController.clear();
                 });
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('📍 Ubicación anclada: $_ubicacionDestino'), backgroundColor: Colors.green));
+                if (!_camaraActiva) _skuManualFocus.requestFocus();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      _modoTrasvase
+                          ? '⚡ Destino anclado: ${JerarquiaUbicacionHelper.formatearRutaVisual(_ubicacionDestino)}. Ahora escanea el SKU/UPC a traer aquí.'
+                          : '📍 Ubicación anclada: ${JerarquiaUbicacionHelper.formatearRutaVisual(_ubicacionDestino)}',
+                    ),
+                    backgroundColor: Colors.green.shade700,
+                  ),
+                );
               },
-              child: const Text('ANCLAR DESTINO', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
             ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrangeAccent, foregroundColor: Colors.white),
-              icon: const Icon(Icons.local_shipping, size: 18),
-              label: const Text('DEJAR CARRITO AQUÍ'),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.deepOrangeAccent, side: const BorderSide(color: Colors.deepOrangeAccent)),
+              icon: const Icon(Icons.local_shipping, size: 16),
+              label: const Text('VACIAR CARRITO AQUÍ', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
               onPressed: () {
                 Navigator.pop(context);
                 setState(() => _ubicacionDestino = muebleEscaneado);
                 _irACarritoTemporal(destinoPreseleccionado: muebleEscaneado);
               },
             ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
-              icon: const Icon(Icons.outbox, size: 18),
-              label: const Text('EXTRAER LOTES'),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.blueAccent, side: const BorderSide(color: Colors.blueAccent)),
+              icon: const Icon(Icons.outbox, size: 16),
+              label: const Text('IR A TRASVASE MASIVO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
               onPressed: () {
                 Navigator.pop(context);
                 _irATrasvaseMasivo(ubicacionInicial: muebleEscaneado);
@@ -240,7 +818,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
     } else if (codigoLimpio.isNotEmpty) {
       if (_modoTrasvase) {
         String skuOficial = await _obtenerSkuOficial(codigoLimpio);
-        await _irATrasvaseMasivo(skuFiltroInicial: skuOficial);
+        await _mostrarDialogoTrasvaseRapido(skuOficial);
       } else {
         setState(() => _enSubPantalla = true);
         await Navigator.push(
@@ -309,7 +887,14 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
           const Center(child: Text("TRASVASE", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white70))),
           Transform.scale(
             scale: 0.78,
-            child: Switch(value: _modoTrasvase, onChanged: (v) => setState(() => _modoTrasvase = v), activeColor: Colors.blueAccent),
+            child: Switch(
+              value: _modoTrasvase,
+              onChanged: (v) {
+                setState(() => _modoTrasvase = v);
+                if (!_camaraActiva) _skuManualFocus.requestFocus();
+              },
+              activeColor: Colors.blueAccent,
+            ),
           ),
         ],
       ),
@@ -386,9 +971,30 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
               ],
             ),
           ),
+          if (_modoTrasvase)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 2.0),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blueAccent.withOpacity(0.6)),
+                ),
+                child: Text(
+                  (_ubicacionDestino != null && _ubicacionDestino != 'Sin anclar')
+                      ? '⚡ Trasvase Rápido: Destino anclado en ${JerarquiaUbicacionHelper.formatearRutaVisual(_ubicacionDestino)}. Escanea el SKU/UPC para traer mercancía aquí.'
+                      : '⚡ Trasvase Rápido Directo: Ancla la ubicación destino abajo (o con QR) o escanea directo el SKU/UPC.',
+                  style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: StreamBuilder<QuerySnapshot>(
@@ -397,44 +1003,24 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                       if (!snapshot.hasData) return const LinearProgressIndicator(color: Colors.amber);
                       List<String> listaMuebles = snapshot.data!.docs.map((d) => d['nombre'] as String).where((n) => n != kUbicacionTransito).toList();
                       if (_ubicacionDestino != null && !listaMuebles.contains(_ubicacionDestino)) listaMuebles.add(_ubicacionDestino!);
-                      return Container(
-                        height: 48,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar") ? Colors.green.withOpacity(0.1) : Colors.white10,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar") ? Colors.greenAccent : Colors.white24),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.location_on, size: 20, color: (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar") ? Colors.greenAccent : Colors.white54),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<String>(
-                                  isExpanded: true,
-                                  dropdownColor: const Color(0xFF2C2C2C),
-                                  hint: Text(_modoTrasvase ? 'Selecciona Mueble Destino' : 'Selecciona Mueble para Anclar', style: TextStyle(color: _modoTrasvase ? Colors.blueAccent : Colors.white54, fontSize: 12)),
-                                  value: _ubicacionDestino,
-                                  items: [
-                                    const DropdownMenuItem<String>(value: null, child: Text('Sin anclar', style: TextStyle(color: Colors.white54, fontSize: 12))),
-                                    ...listaMuebles.map((u) => DropdownMenuItem<String>(value: u, child: Text(u, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12))))
-                                  ],
-                                  onChanged: (val) => setState(() => _ubicacionDestino = val),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                      List<String> hojas = listaMuebles.where((u) => !listaMuebles.any((otra) => otra.startsWith('$u > '))).toList();
+                      return SelectorJerarquicoUbicacion(
+                        todasLasRutas: hojas,
+                        rutaSeleccionada: _ubicacionDestino,
+                        permitirSeleccionParcial: false,
+                        textoRaizVacio: _modoTrasvase
+                            ? '🎯 Sin anclar (Elige Destino para Trasvase Rápido: PISO, BODEGA, DISPLAY)'
+                            : '📍 Sin anclar (Selecciona PISO, BODEGA o DISPLAY)',
+                        onRutaCambiada: (val) => setState(() => _ubicacionDestino = val),
                       );
                     },
                   ),
                 ),
                 if (_ubicacionDestino != null && _ubicacionDestino != "Sin anclar")
                   IconButton(
-                    icon: const Icon(Icons.outbox, color: Colors.blueAccent),
-                    tooltip: "Extraer mercancía de $_ubicacionDestino",
-                    onPressed: () => _irATrasvaseMasivo(ubicacionInicial: _ubicacionDestino),
+                    icon: const Icon(Icons.close, color: Colors.redAccent),
+                    tooltip: "Desanclar ubicación",
+                    onPressed: () => setState(() => _ubicacionDestino = null),
                   ),
               ],
             ),
@@ -486,12 +1072,12 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                           const Icon(Icons.videocam_off, size: 50, color: Colors.white24),
                           const SizedBox(height: 8),
                           Text(
-                          _camaraActiva
-                              ? 'Cámara en pausa\n(Modo alto rendimiento)'
-                              : 'Cámara desactivada (Ahorro de RAM y Batería)\nListo para usar con escáner físico abajo',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.white54, fontSize: 12),
-                        ),
+                            _camaraActiva
+                                ? 'Cámara en pausa\n(Modo alto rendimiento)'
+                                : 'Cámara desactivada (Ahorro de RAM y Batería)\nListo para usar con escáner físico abajo',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          ),
                         ],
                       ),
                     ),
@@ -505,13 +1091,13 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                 controller: _skuController,
                 focusNode: _skuManualFocus,
                 decoration: InputDecoration(
-                  hintText: _modoTrasvase ? 'Busca SKU o UPC para extraer...' : 'SKU / UPC Manual...',
+                  hintText: _modoTrasvase ? 'Escanea SKU / UPC para Trasvase Rápido...' : 'SKU / UPC Manual...',
                   filled: true,
                   fillColor: Colors.white10,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                   suffixIcon: IconButton(
-                    icon: const Icon(Icons.search, color: Colors.amber),
+                    icon: Icon(Icons.search, color: _modoTrasvase ? Colors.blueAccent : Colors.amber),
                     onPressed: () {
                       if (_skuController.text.isNotEmpty) {
                         setState(() => _bloquearEscaneo = true);
@@ -530,6 +1116,32 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class PantallaEscanerQRUbicacion extends StatefulWidget {
+  const PantallaEscanerQRUbicacion({super.key});
+  @override
+  State<PantallaEscanerQRUbicacion> createState() => _PantallaEscanerQRUbicacionState();
+}
+
+class _PantallaEscanerQRUbicacionState extends State<PantallaEscanerQRUbicacion> {
+  bool _detectado = false;
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Escanear QR de Ubicación Destino', style: TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold))),
+      body: MobileScanner(
+        onDetect: (capture) {
+          if (_detectado) return;
+          final barcode = capture.barcodes.first;
+          if (barcode.rawValue != null && barcode.rawValue!.trim().isNotEmpty) {
+            setState(() => _detectado = true);
+            Navigator.pop(context, barcode.rawValue!.trim());
+          }
+        },
       ),
     );
   }
@@ -634,6 +1246,112 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
     }
   }
 
+  DateTime? _parsearFechaManual(String input) {
+    String raw = input.trim();
+    if (raw.isEmpty) return null;
+
+    int? dia, mes, anio;
+    if (RegExp(r'[.,/\-\s]').hasMatch(raw)) {
+      List<String> partes = raw.split(RegExp(r'[.,/\-\s]+')).where((s) => s.isNotEmpty).toList();
+      if (partes.length == 3) {
+        dia = int.tryParse(partes[0]);
+        mes = int.tryParse(partes[1]);
+        anio = int.tryParse(partes[2]);
+      }
+    } else {
+      String clean = raw.replaceAll(RegExp(r'[^0-9]'), '');
+      if (clean.length == 8) {
+        dia = int.tryParse(clean.substring(0, 2));
+        mes = int.tryParse(clean.substring(2, 4));
+        anio = int.tryParse(clean.substring(4, 8));
+      } else if (clean.length == 6) {
+        dia = int.tryParse(clean.substring(0, 2));
+        mes = int.tryParse(clean.substring(2, 4));
+        int? y2 = int.tryParse(clean.substring(4, 6));
+        if (y2 != null) anio = 2000 + y2;
+      }
+    }
+
+    if (dia == null || mes == null || anio == null) return null;
+    if (anio < 100) anio += 2000;
+    if (mes < 1 || mes > 12 || dia < 1 || dia > 31 || anio < 2020 || anio > 2100) return null;
+
+    DateTime fecha = DateTime(anio, mes, dia);
+    if (fecha.year != anio || fecha.month != mes || fecha.day != dia) return null;
+    return fecha;
+  }
+
+  void _mostrarDialogoIngresoFechaManual() {
+    final TextEditingController manualFechaCtrl = TextEditingController();
+
+    void confirmarTexto(BuildContext dialogCtx) {
+      DateTime? fechaParseada = _parsearFechaManual(manualFechaCtrl.text);
+      if (fechaParseada != null) {
+        setState(() => _fechaSeleccionada = fechaParseada);
+        Navigator.pop(dialogCtx);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Formato inválido. Usa 01.01.2026, 01,01,2026, 01012026 o 01/01/2026'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 1.5)),
+        title: const Row(
+          children: [
+            Icon(Icons.dialpad, color: Colors.amber, size: 22),
+            SizedBox(width: 8),
+            Expanded(child: Text('Ingreso Manual de Caducidad', style: TextStyle(color: Colors.amber, fontSize: 15, fontWeight: FontWeight.bold))),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Formatos aceptados: 01.01.2026 • 01,01,2026 • 01012026 • 01/01/2026',
+              style: TextStyle(color: Colors.white70, fontSize: 11),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: manualFechaCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.datetime,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.amberAccent),
+              decoration: const InputDecoration(
+                labelText: 'Escribe la fecha de caducidad',
+                hintText: 'Ej. 01012026 o 01.01.2026',
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => confirmarTexto(ctx),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+            icon: const Icon(Icons.check, size: 18),
+            label: const Text('Confirmar', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () => confirmarTexto(ctx),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _mostrarSelectorFechaFluido() {
     DateTime tempDate = _fechaSeleccionada ?? DateTime.now();
     DateTime hoy = DateTime.now();
@@ -643,7 +1361,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
         backgroundColor: const Color(0xFF1E1E1E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Container(
-          height: 350,
+          height: 370,
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
@@ -657,17 +1375,34 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
                   onDateChanged: (DateTime newDate) => tempDate = newDate,
                 ),
               ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
                 children: [
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                  ),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.cyanAccent,
+                      side: const BorderSide(color: Colors.cyanAccent),
+                    ),
+                    icon: const Icon(Icons.dialpad, size: 16),
+                    label: const Text('Ingreso Manual', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _mostrarDialogoIngresoFechaManual();
+                    },
+                  ),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
                     onPressed: () {
                       setState(() => _fechaSeleccionada = tempDate);
                       Navigator.pop(context);
                     },
-                    child: const Text('Confirmar'),
+                    child: const Text('Confirmar', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),
