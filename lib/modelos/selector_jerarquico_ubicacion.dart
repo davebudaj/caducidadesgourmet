@@ -262,6 +262,7 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
                             child: Text(
                               idxCopia == 0 ? '📍 $op' : '↳ $op',
                               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),

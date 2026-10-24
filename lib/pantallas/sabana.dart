@@ -657,22 +657,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           
           var provs = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreProveedor']?.toString() ?? 'ND').toSet().toList()..sort();
           var grupos = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreGpoArticulos']?.toString() ?? 'ND').toSet().toList()..sort();
-          Set<String> conjuntoMueblesYRamas = {};
+          Map<String, int> conteoPorUbicacion = {};
           for (var doc in snapshot.data!.docs) {
-            String u = ((doc.data() as Map)['ubicacion']?.toString() ?? 'ND');
-            if (_filtroTipoUbicacion == null || u.toUpperCase().contains(_filtroTipoUbicacion!)) {
-              conjuntoMueblesYRamas.add(u);
-              if (u.contains(' > ')) {
-                List<String> p = u.split(' > ');
-                String acum = p[0];
-                for (int k = 1; k < p.length - 1; k++) {
-                  acum = '$acum > ${p[k]}';
-                  conjuntoMueblesYRamas.add(acum);
-                }
-              }
+            String u = ((doc.data() as Map)['ubicacion']?.toString() ?? 'ND').trim();
+            if (u.isNotEmpty && u != 'EN TRÁNSITO') {
+              conteoPorUbicacion[u] = (conteoPorUbicacion[u] ?? 0) + 1;
             }
           }
-          var mueblesDisponibles = conjuntoMueblesYRamas.toList()..sort();
+          var mueblesDisponibles = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(conteoPorUbicacion.keys);
 
           Map<String, int> sumaFisicaPorSku = {};
           for (var doc in snapshot.data!.docs) {
@@ -708,8 +700,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               else if (_filtroRiesgoEspecial == 'sano') coincideRiesgo = dias > 30;
             }
             
-            bool coincideTipoUbi = _filtroTipoUbicacion == null || ubi.toUpperCase().contains(_filtroTipoUbicacion!);
-            bool coincideMueble = _filtroMueble == null || ubi == _filtroMueble || ubi.startsWith('${_filtroMueble!} > ');
+            List<String> prefijoUbi = _filtroMueble != null
+                ? JerarquiaUbicacionHelper.descomponerRuta(_filtroMueble!)
+                : [];
+            bool coincideTipoUbi = true;
+            bool coincideMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(ubi, prefijoUbi);
             bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
             bool coincideDescuadre = true;
             if (_filtroDescuadreSAP) {
@@ -913,41 +908,6 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             children: [
                               const Padding(
                                 padding: EdgeInsets.only(left: 4, bottom: 4),
-                                child: Text('Filtro Ubicación', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
-                              ),
-                              Container(
-                                height: 40,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String?>(
-                                    isExpanded: true,
-                                    dropdownColor: const Color(0xFF2C2C2C),
-                                    value: _filtroTipoUbicacion,
-                                    hint: const Text('Filtro Ubicación', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                    items: const [
-                                      DropdownMenuItem(value: null, child: Text('Ubicación: Todas', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
-                                      DropdownMenuItem(value: 'BODEGA', child: Text('📦 BODEGA', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 'PISO', child: Text('🏪 PISO', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 'DISPLAY', child: Text('✨ DISPLAY', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
-                                    ],
-                                    onChanged: (v) => setState(() {
-                                      _filtroTipoUbicacion = v;
-                                      _filtroMueble = null;
-                                    }),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.only(left: 4, bottom: 4),
                                 child: Text('Filtro Mes', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
                               ),
                               Container(
@@ -977,38 +937,27 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             ],
                           ),
                         ),
-                        if (_filtroTipoUbicacion != null) ...[
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4, bottom: 4),
-                                  child: Text('Muebles en $_filtroTipoUbicacion', style: const TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
-                                ),
-                                Container(
-                                  height: 40,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.cyanAccent.withOpacity(0.4))),
-                                  child: DropdownButtonHideUnderline(
-                                    child: DropdownButton<String?>(
-                                      isExpanded: true,
-                                      dropdownColor: const Color(0xFF2C2C2C),
-                                      value: (mueblesDisponibles.contains(_filtroMueble)) ? _filtroMueble : null,
-                                      hint: const Text('Nombre del mueble', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                      items: [
-                                        DropdownMenuItem(value: null, child: Text('Todos (${mueblesDisponibles.length})', style: const TextStyle(fontSize: 12, color: Colors.greenAccent))),
-                                        ...mueblesDisponibles.map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
-                                      ],
-                                      onChanged: (v) => setState(() => _filtroMueble = v),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4, bottom: 4),
+                          child: Text('Filtro Ubicación (Desplegable por Nivel)', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                        ),
+                        SelectorJerarquicoUbicacion(
+                          todasLasRutas: mueblesDisponibles,
+                          rutaSeleccionada: _filtroMueble,
+                          permitirSeleccionParcial: true,
+                          textoRaizVacio: '📍 Ubicación: Todas (PISO / BODEGA / DISPLAY)',
+                          conteoLotesPorRuta: conteoPorUbicacion,
+                          onRutaCambiada: (val) => setState(() {
+                            _filtroMueble = val;
+                            _filtroTipoUbicacion = null;
+                          }),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),

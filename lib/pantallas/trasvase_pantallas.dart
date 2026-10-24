@@ -373,16 +373,27 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                                           ),
                                         ],
                                       ),
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 8, bottom: 6),
+                                        child: Text(
+                                          '📍 Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}',
+                                          style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
                                       Row(
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
-                                          Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text('📅 Cad: $fechaFormateada ($dias d)', style: TextStyle(color: dias <= 15 ? Colors.redAccent : Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                              Text('📦 Existencia: $maximoPermitido pzas', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                              Text('📍 Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                            ],
+                                          Expanded(
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(left: 8, right: 6),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('📅 Cad: $fechaFormateada ($dias d)', style: TextStyle(color: dias <= 15 ? Colors.redAccent : Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                                  Text('📦 Existencia: $maximoPermitido pzas', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                                ],
+                                              ),
+                                            ),
                                           ),
                                           Row(
                                             mainAxisSize: MainAxisSize.min,
@@ -736,12 +747,17 @@ class _PantallaCarritoTemporalState extends State<PantallaCarritoTemporal> {
                                       Row(
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
-                                          Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text('📅 Cad: $fechaFormateada', style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                                              Text('🛒 En carrito: $maxEnCarrito pzas', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                            ],
+                                          Expanded(
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(left: 8, right: 6),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('📅 Cad: $fechaFormateada', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                                  Text('🛒 En carrito: $maxEnCarrito pzas', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                                ],
+                                              ),
+                                            ),
                                           ),
                                           Row(
                                             mainAxisSize: MainAxisSize.min,
