@@ -102,17 +102,20 @@ class SelectorJerarquicoUbicacion extends StatefulWidget {
 
 class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacion> {
   List<String> _nivelesElegidos = [];
+  String? _ultimaRutaEmitida;
 
   @override
   void initState() {
     super.initState();
+    _ultimaRutaEmitida = widget.rutaSeleccionada;
     _sincronizarDesdeRuta(widget.rutaSeleccionada);
   }
 
   @override
   void didUpdateWidget(covariant SelectorJerarquicoUbicacion oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.rutaSeleccionada != widget.rutaSeleccionada) {
+    if (widget.rutaSeleccionada != _ultimaRutaEmitida) {
+      _ultimaRutaEmitida = widget.rutaSeleccionada;
       _sincronizarDesdeRuta(widget.rutaSeleccionada);
     }
   }
@@ -294,7 +297,9 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
                       _nivelesElegidos.add(val);
                     }
                   });
-                  widget.onRutaCambiada(_resolverValorParaCallback());
+                  String? resuelta = _resolverValorParaCallback();
+                  _ultimaRutaEmitida = resuelta;
+                  widget.onRutaCambiada(resuelta);
                 },
               ),
             ),

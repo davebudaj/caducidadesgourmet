@@ -384,7 +384,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
 
     String currentDesc = d['descripcion'] ?? 'Artículo Nuevo';
     Map<String, dynamic>? updatedMasterData;
-    String? localUbi;
+    String? localUbi = d['ubicacion']?.toString();
     FocusNode skuFocus = FocusNode();
     bool listenerAdded = false;
 
@@ -446,19 +446,49 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('ubicaciones').orderBy('nombre').snapshots(),
                       builder: (context, ubiSnapshot) {
                         if (!ubiSnapshot.hasData) return const LinearProgressIndicator();
-                        List<String> validUbis = ubiSnapshot.data!.docs.map((u) => u['nombre'].toString()).toList();
-                        if (localUbi == null) {
-                          String currentUbi = d['ubicacion'].toString();
-                          if (validUbis.contains(currentUbi)) localUbi = currentUbi;
+                        List<String> todas = ubiSnapshot.data!.docs
+                            .map((u) => u['nombre'].toString())
+                            .where((n) => n != 'EN TRÁNSITO')
+                            .toList();
+                        List<String> validUbis = todas
+                            .where((u) => !todas.any((otra) => otra.startsWith('$u > ')))
+                            .toList();
+                        if (localUbi != null && localUbi!.isNotEmpty && !validUbis.contains(localUbi)) {
+                          validUbis.add(localUbi!);
                         }
 
-                        return DropdownButtonFormField<String?>(
-                          decoration: const InputDecoration(labelText: "Seleccionar Mueble / Ubicación", labelStyle: TextStyle(color: Colors.amber)),
-                          dropdownColor: const Color(0xFF2C2C2C),
-                          value: localUbi,
-                          hint: const Text("Elige...", style: TextStyle(color: Colors.white24)),
-                          items: validUbis.map((ubi) => DropdownMenuItem(value: ubi, child: Text(ubi, style: const TextStyle(fontSize: 12)))).toList(),
-                          onChanged: (val) => setDialogState(() => localUbi = val),
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              "Seleccionar Mueble / Ubicación (Desplegable)",
+                              style: TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 6),
+                            SelectorJerarquicoUbicacion(
+                              todasLasRutas: validUbis,
+                              rutaSeleccionada: localUbi,
+                              permitirSeleccionParcial: false,
+                              textoRaizVacio: '1. Selecciona Área (PISO / BODEGA / DISPLAY)...',
+                              onRutaCambiada: (val) => setDialogState(() => localUbi = val),
+                            ),
+                            if (localUbi != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                  '📍 Ubicación final: ${JerarquiaUbicacionHelper.formatearRutaVisual(localUbi)}',
+                                  style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                              )
+                            else
+                              const Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                  '⚠️ Selecciona hasta el último sub-nivel de la ubicación.',
+                                  style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
+                                ),
+                              ),
+                          ],
                         );
                       },
                     ),
@@ -504,6 +534,12 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     int? nCant = int.tryParse(cantCtrl.text);
                     String nSku = await _traducirCodigoASku(skuCtrl.text);
 
+                    if (localUbi == null || localUbi!.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Selecciona todos los niveles de la ubicación antes de guardar.'), backgroundColor: Colors.orange),
+                      );
+                      return;
+                    }
                     if (nCant != null && nSku.isNotEmpty) {
                       var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(nSku).get();
                       if (masterDoc.exists) {
