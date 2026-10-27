@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'trasvase_pantallas.dart';
 import '../modelos/selector_jerarquico_ubicacion.dart';
 import 'finanzas.dart';
+import 'sabana.dart';
 
 class PantallaMisiones extends StatefulWidget {
   final String idTiendaGlobal;
@@ -37,7 +38,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
     if (msg.contains('90 DÍAS')) return 2;
     if (msg.contains('45 días')) return 3;
     if (m['descontado'] != null) return 4;
-    return 5;
+    if (m['esArticuloNuevo'] == true || msg.contains('ARTÍCULO NUEVO')) return 5;
+    return 6;
   }
 
   Widget _buildHeader(int priority, bool completada) {
@@ -89,6 +91,14 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
         child: const Text('🛒 OPERACIÓN: DESCONTAR VENTA (Mantén presionado -> Opciones)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
       );
     }
+    if (priority == 5) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        color: Colors.purpleAccent.shade700,
+        width: double.infinity,
+        child: const Text('🔎 AUDITORÍA DE CATÁLOGO: VALIDAR UPC / SKU EN ANAQUEL (Toca para editar)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
+      );
+    }
     return const SizedBox.shrink();
   }
 
@@ -124,6 +134,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
       _dialogoTratamientoDesdeMision(docMision, m, soloMermaODevolucion: false);
     } else if (prioridad == 4) {
       _dialogoAuditoriaVenta(docMision, m);
+    } else if (prioridad == 5) {
+      _dialogoValidarArticuloNuevo(docMision, m);
     }
   }
 
@@ -392,6 +404,192 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                   await batch.commit();
                 },
                 child: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _dialogoValidarArticuloNuevo(QueryDocumentSnapshot docMision, Map<String, dynamic> m) {
+    String codigoOriginal = (m['sku'] ?? '').toString().trim();
+    String ubi = JerarquiaUbicacionHelper.formatearRutaVisual(m['ubicacion']?.toString());
+
+    TextEditingController skuOficialCtrl = TextEditingController(text: codigoOriginal);
+    TextEditingController upcCtrl = TextEditingController(text: (m['ean'] ?? (codigoOriginal.length >= 11 ? codigoOriginal : '')).toString());
+    TextEditingController descCtrl = TextEditingController(
+      text: (m['descripcion'] != null && m['descripcion'] != 'Artículo Nuevo') ? m['descripcion'].toString() : '',
+    );
+
+    Map<String, dynamic>? datosMaestrosEncontrados;
+    String mensajeEstado = 'Ve a la ubicación física, revisa el producto y escribe o escanea su SKU oficial de SAP (o su nombre):';
+    bool guardando = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          Future<void> buscarMatchCodigo(String cod) async {
+            if (cod.trim().isEmpty) return;
+            var res = await JerarquiaUbicacionHelper.buscarProductoMaestro(cod.trim());
+            if (res != null) {
+              setModalState(() {
+                datosMaestrosEncontrados = res;
+                if (res['sku'] != null && res['sku'].toString().trim().isNotEmpty) {
+                  skuOficialCtrl.text = res['sku'].toString().trim();
+                }
+                if (res['ean'] != null && res['ean'].toString().trim().isNotEmpty) {
+                  upcCtrl.text = res['ean'].toString().trim();
+                }
+                descCtrl.text = (res['descripcion'] ?? '').toString();
+                mensajeEstado = '✅ ¡Match encontrado en Catálogo Maestro! (${res['nombreProveedor'] ?? 'ND'})';
+              });
+            } else {
+              setModalState(() {
+                datosMaestrosEncontrados = null;
+                mensajeEstado = 'ℹ️ Ese código no está en el CSV de la Zona. Escribe abajo el nombre del artículo para identificarlo en todo el sistema.';
+              });
+            }
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.purpleAccent, width: 2)),
+            title: const Row(
+              children: [
+                Icon(Icons.qr_code_2, color: Colors.purpleAccent, size: 24),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('🔎 Validar Artículo Nuevo (Sin Match)', style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: Colors.amber.withOpacity(0.12), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber.withOpacity(0.5))),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('📍 Ubicación física: $ubi', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                        const SizedBox(height: 4),
+                        Text('Código capturado originalmente: $codigoOriginal', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(mensajeEstado, style: TextStyle(color: datosMaestrosEncontrados != null ? Colors.greenAccent : Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: skuOficialCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'SKU Oficial SAP (o código principal)',
+                      filled: true,
+                      fillColor: Colors.white10,
+                      border: const OutlineInputBorder(),
+                      suffixIcon: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.search, color: Colors.amber),
+                            tooltip: 'Buscar en Catálogo Maestro',
+                            onPressed: () => buscarMatchCodigo(skuOficialCtrl.text),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.qr_code_scanner, color: Colors.cyanAccent),
+                            tooltip: 'Escanear con cámara',
+                            onPressed: () async {
+                              String? escaneado = await Navigator.push(context, MaterialPageRoute(builder: (_) => const PantallaEscanerRapido()));
+                              if (escaneado != null && escaneado.trim().isNotEmpty) {
+                                skuOficialCtrl.text = escaneado.trim();
+                                await buscarMatchCodigo(escaneado.trim());
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    onSubmitted: buscarMatchCodigo,
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: upcCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'UPC / Código de Barras del Empaque (EAN)',
+                      filled: true,
+                      fillColor: Colors.white10,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Descripción / Nombre del Artículo',
+                      hintText: 'Ej. TÉ VERDE JAPONÉS ITO EN .500',
+                      filled: true,
+                      fillColor: Colors.white10,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: guardando ? null : () => Navigator.pop(ctx),
+                child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white),
+                icon: guardando
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save_as, size: 18),
+                label: const Text('GUARDAR EN TODAS LAS INSTANCIAS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                onPressed: guardando
+                    ? null
+                    : () async {
+                        String skuNuevo = skuOficialCtrl.text.trim();
+                        if (skuNuevo.isEmpty) return;
+                        setModalState(() => guardando = true);
+
+                        if (datosMaestrosEncontrados == null) {
+                          datosMaestrosEncontrados = await JerarquiaUbicacionHelper.buscarProductoMaestro(skuNuevo);
+                        }
+                        if (datosMaestrosEncontrados != null && datosMaestrosEncontrados!['sku'] != null) {
+                          skuNuevo = datosMaestrosEncontrados!['sku'].toString().trim();
+                        }
+
+                        String descNueva = descCtrl.text.trim().isNotEmpty
+                            ? descCtrl.text.trim()
+                            : (datosMaestrosEncontrados?['descripcion']?.toString() ?? 'ARTÍCULO VALIDADO ($skuNuevo)');
+
+                        int actualizados = await JerarquiaUbicacionHelper.actualizarArticuloEnTodasLasInstancias(
+                          idTiendaGlobal: widget.idTiendaGlobal,
+                          codigoAnterior: codigoOriginal,
+                          nuevoSku: skuNuevo,
+                          nuevoEan: upcCtrl.text.trim(),
+                          nuevaDescripcion: descNueva,
+                          datosMaestros: datosMaestrosEncontrados,
+                          usuarioActual: widget.usuarioActual,
+                        );
+
+                        if (mounted) {
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('✅ Artículo actualizado en $actualizados lote(s) y vinculado en la Base de Datos.'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      },
               ),
             ],
           );
@@ -739,10 +937,40 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
         }
       }
 
-      // 2. GENERAR NUEVAS MISIONES SI HAY LOTES QUE ENTRARON EN RIESGO
+      // 2. GENERAR NUEVAS MISIONES SI HAY LOTES QUE ENTRARON EN RIESGO O SON "ARTÍCULO NUEVO" SIN MATCH
+      Set<String> codigosConMisionArtNuevoActiva = misionesPendSnap.docs
+          .where((m) => _getPriority(m.data()) == 5)
+          .map((m) => (m.data()['sku'] ?? '').toString().trim())
+          .toSet();
+
       for (var doc in snapshot.docs) {
         var data = doc.data();
         String ubicacion = (data['ubicacion'] ?? '').toString().toUpperCase();
+        String descLote = (data['descripcion'] ?? '').toString().trim();
+        String skuLote = (data['sku'] ?? '').toString().trim();
+
+        bool esMissing = descLote == 'Artículo Nuevo' ||
+            descLote == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' ||
+            descLote == 'Sin Nombre';
+
+        if (esMissing && skuLote.isNotEmpty && !codigosConMisionArtNuevoActiva.contains(skuLote)) {
+          codigosConMisionArtNuevoActiva.add(skuLote);
+          batch.set(_refMisiones.doc(), {
+            'sku': skuLote,
+            'ean': data['ean'] ?? (skuLote.length >= 11 ? skuLote : ''),
+            'descripcion': 'Artículo Nuevo (Validar UPC / SKU en físico)',
+            'ubicacion': data['ubicacion'] ?? 'ND',
+            'cantidad': data['cantidad'] ?? 1,
+            'fechaCaducidad': data['fechaCaducidad'],
+            'nombreProveedor': data['nombreProveedor'] ?? 'SIN MATCH EN BD',
+            'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
+            'estado': 'pendiente',
+            'esArticuloNuevo': true,
+            'fechaGeneracion': FieldValue.serverTimestamp(),
+            'mensaje': '🔎 ARTÍCULO NUEVO SIN MATCH: Ir a la ubicación, revisar físicamente el UPC / SKU del lote y editarlo para vincularlo.',
+          });
+          misionesNuevas++;
+        }
 
         if (data['fechaCaducidad'] != null) {
           DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
@@ -948,6 +1176,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                       DropdownMenuItem(value: 2, child: Text('🚨 Política Bodega (90 Días)', style: TextStyle(fontSize: 11, color: Colors.pinkAccent, fontWeight: FontWeight.bold))),
                                       DropdownMenuItem(value: 3, child: Text('⚠️ Caducidad Cercana (45 Días)', style: TextStyle(fontSize: 11, color: Colors.orangeAccent, fontWeight: FontWeight.bold))),
                                       DropdownMenuItem(value: 4, child: Text('🛒 Descontar Venta (SAP)', style: TextStyle(fontSize: 11, color: Colors.blueAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 5, child: Text('🔎 Validar Artículo Nuevo (Sin Match)', style: TextStyle(fontSize: 11, color: Colors.purpleAccent, fontWeight: FontWeight.bold))),
                                     ],
                                     onChanged: (v) => setState(() => _filtroTipoMision = v),
                                   ),
@@ -1040,7 +1269,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
 
                       Color borderColor = _verHistorial
                           ? Colors.green
-                          : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : Colors.blueAccent)));
+                          : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : (prioridad == 4 ? Colors.blueAccent : Colors.purpleAccent))));
 
                       return Card(
                         color: Colors.white10,

@@ -253,9 +253,10 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
     var lotesFiltrados = lotesActuales.where((doc) {
       if (_busquedaInterna.isEmpty) return true;
       var d = doc.data();
-      return (d['descripcion'] ?? '').toString().toLowerCase().contains(_busquedaInterna) ||
-          (d['sku'] ?? '').toString().toLowerCase().contains(_busquedaInterna) ||
-          (d['ean'] ?? '').toString().toLowerCase().contains(_busquedaInterna);
+      return JerarquiaUbicacionHelper.coincideBusquedaInteligente(
+        _busquedaInterna,
+        [d['descripcion']?.toString(), d['sku']?.toString(), d['ean']?.toString(), d['ubicacion']?.toString()],
+      );
     }).toList();
 
     int totalLotesMarcados = _cantidadesSeleccionadas.values.where((v) => v > 0).length;

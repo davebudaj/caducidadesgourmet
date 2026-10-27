@@ -2,6 +2,178 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 class JerarquiaUbicacionHelper {
+  // Normaliza texto quitando acentos, diéresis, comas, puntos y apóstrofes para búsquedas rápidas
+  static String normalizarTextoBusqueda(String input) {
+    if (input.isEmpty) return '';
+    String s = input.toLowerCase();
+    const mapaAcentos = {
+      'á': 'a', 'à': 'a', 'ä': 'a', 'â': 'a', 'ã': 'a',
+      'é': 'e', 'è': 'e', 'ë': 'e', 'ê': 'e',
+      'í': 'i', 'ì': 'i', 'ï': 'i', 'î': 'i',
+      'ó': 'o', 'ò': 'o', 'ö': 'o', 'ô': 'o', 'õ': 'o',
+      'ú': 'u', 'ù': 'u', 'ü': 'u', 'û': 'u',
+      'ñ': 'n',
+    };
+    mapaAcentos.forEach((k, v) {
+      s = s.replaceAll(k, v);
+    });
+    // Quitar comas, puntos, comillas simples/dobles y exceso de espacios
+    s = s.replaceAll(RegExp(r"[^a-z0-9\s]"), " ");
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s;
+  }
+
+  static bool coincideBusquedaInteligente(String consultaRaw, List<String?> camposDocumento) {
+    String q = normalizarTextoBusqueda(consultaRaw);
+    if (q.isEmpty) return true;
+    List<String> palabras = q.split(' ').where((w) => w.isNotEmpty).toList();
+    String acumulado = camposDocumento
+        .map((c) => normalizarTextoBusqueda(c ?? ''))
+        .join(' ');
+    for (String p in palabras) {
+      if (!acumulado.contains(p)) return false;
+    }
+    return true;
+  }
+
+  // Actualiza el SKU, UPC/EAN y Descripción de un artículo en TODAS las instancias de la tienda y crea el puente en maestro_productos
+  static Future<int> actualizarArticuloEnTodasLasInstancias({
+    required String idTiendaGlobal,
+    required String codigoAnterior,
+    required String nuevoSku,
+    String? nuevoEan,
+    String? nuevaDescripcion,
+    Map<String, dynamic>? datosMaestros,
+    String? usuarioActual,
+  }) async {
+    var db = FirebaseFirestore.instance;
+    var refTienda = db.collection('tiendas').doc(idTiendaGlobal);
+
+    String skuFinal = nuevoSku.trim();
+    String codigoViejo = codigoAnterior.trim();
+    // Si antes tenía un código largo tipo UPC/EAN (11-14 dígitos) y ahora ponen el SKU de SAP, conservamos ese UPC como EAN
+    String eanFinal = (nuevoEan != null && nuevoEan.trim().isNotEmpty)
+        ? nuevoEan.trim()
+        : (datosMaestros?['ean']?.toString().trim() ?? (codigoViejo.length >= 11 && codigoViejo != skuFinal ? codigoViejo : ''));
+
+    String descFinal = (nuevaDescripcion != null && nuevaDescripcion.trim().isNotEmpty && nuevaDescripcion.trim() != 'Artículo Nuevo')
+        ? nuevaDescripcion.trim().toUpperCase()
+        : (datosMaestros?['descripcion']?.toString().trim() ?? 'SIN NOMBRE');
+
+    WriteBatch batch = db.batch();
+    int ops = 0;
+    int lotesActualizados = 0;
+
+    Future<void> checkBatch() async {
+      ops++;
+      if (ops >= 400) {
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+      }
+    }
+
+    // 1. Guardar puente en maestro_productos para que futuros escaneos de este UPC o SKU hagan match automático
+    Map<String, dynamic> fichaMaestra = {
+      'sku': skuFinal,
+      'ean': eanFinal,
+      'descripcion': descFinal,
+      'idProveedor': datosMaestros?['idProveedor'] ?? 'ND',
+      'nombreProveedor': datosMaestros?['nombreProveedor'] ?? 'POR ASIGNAR',
+      'idCategoria': datosMaestros?['idCategoria'] ?? 'ND',
+      'nombreGpoArticulos': datosMaestros?['nombreGpoArticulos'] ?? 'SIN GRUPO',
+      'precioVenta': datosMaestros?['precioVenta'] ?? '0',
+      'oh': datosMaestros?['oh'] ?? '0',
+    };
+
+    if (skuFinal.isNotEmpty) {
+      batch.set(db.collection('maestro_productos').doc(skuFinal), fichaMaestra, SetOptions(merge: true));
+      await checkBatch();
+    }
+    if (eanFinal.isNotEmpty && eanFinal != '0') {
+      batch.set(db.collection('maestro_productos').doc(eanFinal), fichaMaestra, SetOptions(merge: true));
+      await checkBatch();
+    }
+    if (codigoViejo.isNotEmpty && codigoViejo != skuFinal && codigoViejo != eanFinal) {
+      batch.set(db.collection('maestro_productos').doc(codigoViejo), fichaMaestra, SetOptions(merge: true));
+      await checkBatch();
+    }
+
+    // 2. Actualizar TODAS las instancias en inventario_activo
+    var invSnap = await refTienda.collection('inventario_activo').get();
+    for (var doc in invSnap.docs) {
+      var d = doc.data();
+      String sDoc = (d['sku'] ?? '').toString().trim();
+      String eDoc = (d['ean'] ?? '').toString().trim();
+
+      if (sDoc == codigoViejo || (codigoViejo.isNotEmpty && eDoc == codigoViejo) || sDoc == skuFinal) {
+        Map<String, dynamic> cambios = {
+          'sku': skuFinal,
+          'descripcion': descFinal,
+          'misionArticuloNuevo': FieldValue.delete(),
+        };
+        if (eanFinal.isNotEmpty) cambios['ean'] = eanFinal;
+        if (datosMaestros != null) {
+          cambios['idProveedor'] = fichaMaestra['idProveedor'];
+          cambios['nombreProveedor'] = fichaMaestra['nombreProveedor'];
+          cambios['idCategoria'] = fichaMaestra['idCategoria'];
+          cambios['nombreGpoArticulos'] = fichaMaestra['nombreGpoArticulos'];
+          cambios['precioVenta'] = fichaMaestra['precioVenta'];
+          cambios['oh'] = fichaMaestra['oh'];
+        }
+        batch.update(doc.reference, cambios);
+        lotesActualizados++;
+        await checkBatch();
+      }
+    }
+
+    // 3. Actualizar todas las misiones en misiones_auditoria y autocompletar las de "VALIDAR ARTÍCULO NUEVO" de este código
+    var misSnap = await refTienda.collection('misiones_auditoria').get();
+    for (var mDoc in misSnap.docs) {
+      var m = mDoc.data();
+      String mSku = (m['sku'] ?? '').toString().trim();
+      String mEan = (m['ean'] ?? '').toString().trim();
+      if (mSku == codigoViejo || (codigoViejo.isNotEmpty && mEan == codigoViejo) || mSku == skuFinal) {
+        String msg = (m['mensaje'] ?? '').toString();
+        bool esMisionArticuloNuevo = m['esArticuloNuevo'] == true || msg.contains('ARTÍCULO NUEVO');
+
+        Map<String, dynamic> cambiosMision = {
+          'sku': skuFinal,
+          'descripcion': descFinal,
+          if (eanFinal.isNotEmpty) 'ean': eanFinal,
+          if (datosMaestros != null) 'nombreProveedor': fichaMaestra['nombreProveedor'],
+          if (datosMaestros != null) 'nombreGpoArticulos': fichaMaestra['nombreGpoArticulos'],
+        };
+
+        if (esMisionArticuloNuevo && m['estado'] == 'pendiente') {
+          cambiosMision['estado'] = 'completada';
+          cambiosMision['completadaPor'] = usuarioActual ?? 'Validado en Sistema';
+          cambiosMision['accionRealizada'] = 'validacion_sku';
+        }
+
+        batch.update(mDoc.reference, cambiosMision);
+        await checkBatch();
+      }
+    }
+
+    // 4. Actualizar registros en historial_tratamientos
+    var histSnap = await refTienda.collection('historial_tratamientos').get();
+    for (var hDoc in histSnap.docs) {
+      var h = hDoc.data();
+      String hSku = (h['sku'] ?? '').toString().trim();
+      if (hSku == codigoViejo) {
+        batch.update(hDoc.reference, {
+          'sku': skuFinal,
+          'descripcion': descFinal,
+        });
+        await checkBatch();
+      }
+    }
+
+    if (ops > 0) await batch.commit();
+    return lotesActualizados;
+  }
+
   static List<String> generarVariantesCodigo(String codigoRaw) {
     String limpio = codigoRaw.trim();
     if (limpio.isEmpty) return [];

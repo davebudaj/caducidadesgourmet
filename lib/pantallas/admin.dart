@@ -1227,6 +1227,26 @@ class _PantallaAdminState extends State<PantallaAdmin> {
           reparados++;
         } else {
           sinMatch++;
+          bool yaTieneMision = misSnap.docs.any((m) =>
+              (m.data()['sku'] ?? '').toString().trim() == skuActual &&
+              (m.data()['esArticuloNuevo'] == true || (m.data()['mensaje'] ?? '').toString().contains('ARTÍCULO NUEVO')));
+          if (!yaTieneMision) {
+            batch.set(_refTienda.collection('misiones_auditoria').doc(), {
+              'sku': skuActual,
+              'ean': eanActual.isNotEmpty ? eanActual : skuActual,
+              'descripcion': 'Artículo Nuevo (Validar UPC / SKU en físico)',
+              'ubicacion': d['ubicacion'] ?? 'ND',
+              'cantidad': d['cantidad'] ?? 1,
+              'fechaCaducidad': d['fechaCaducidad'],
+              'nombreProveedor': 'SIN MATCH EN BD',
+              'nombreGpoArticulos': 'SIN GRUPO',
+              'estado': 'pendiente',
+              'esArticuloNuevo': true,
+              'fechaGeneracion': FieldValue.serverTimestamp(),
+              'mensaje': '🔎 ARTÍCULO NUEVO SIN MATCH: Ir a la ubicación, revisar físicamente el UPC / SKU del lote y editarlo para vincularlo.',
+            });
+            await commitSiNecesario();
+          }
         }
       }
 

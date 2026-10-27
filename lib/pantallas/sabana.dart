@@ -374,8 +374,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
 
   void _editarRegistro(QueryDocumentSnapshot docSnap) {
     var d = docSnap.data() as Map<String, dynamic>;
+    String skuOriginalLote = (d['sku'] ?? '').toString().trim();
     TextEditingController cantCtrl = TextEditingController(text: d['cantidad'].toString());
-    TextEditingController skuCtrl = TextEditingController(text: d['sku'].toString());
+    TextEditingController skuCtrl = TextEditingController(text: skuOriginalLote);
+    TextEditingController eanCtrl = TextEditingController(text: (d['ean'] ?? (skuOriginalLote.length >= 11 ? skuOriginalLote : '')).toString());
+    TextEditingController descCtrl = TextEditingController(text: (d['descripcion'] ?? 'Artículo Nuevo').toString());
     DateTime fechaOriginal = (d['fechaCaducidad'] as Timestamp).toDate();
     DateTime fechaEditada = fechaOriginal;
 
@@ -403,10 +406,15 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       if (updatedMasterData?['sku'] != null && updatedMasterData!['sku'].toString().trim().isNotEmpty) {
                         skuCtrl.text = updatedMasterData!['sku'].toString().trim();
                       }
-                      setDialogState(() => currentDesc = updatedMasterData?['descripcion'] ?? 'Sin Nombre');
+                      if (updatedMasterData?['ean'] != null && updatedMasterData!['ean'].toString().trim().isNotEmpty) {
+                        eanCtrl.text = updatedMasterData!['ean'].toString().trim();
+                      }
+                      String dOficial = updatedMasterData?['descripcion'] ?? 'Sin Nombre';
+                      descCtrl.text = dOficial;
+                      setDialogState(() => currentDesc = '✅ Match en Catálogo: $dOficial');
                     } else {
                       updatedMasterData = null;
-                      setDialogState(() => currentDesc = 'Artículo Nuevo (No en catálogo)');
+                      setDialogState(() => currentDesc = 'ℹ️ Código no está en Catálogo Maestro (Puedes escribir su nombre abajo)');
                     }
                   } catch (e) {
                     setDialogState(() => currentDesc = 'Error al buscar');
@@ -432,6 +440,16 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     ),
                     const SizedBox(height: 5),
                     Align(alignment: Alignment.centerLeft, child: Text(currentDesc, style: const TextStyle(fontSize: 10, color: Colors.greenAccent))),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: eanCtrl,
+                      decoration: const InputDecoration(labelText: 'UPC / Código de Barras (EAN)', labelStyle: TextStyle(color: Colors.cyanAccent, fontSize: 12), filled: true, fillColor: Colors.white10),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: descCtrl,
+                      decoration: const InputDecoration(labelText: 'Descripción / Nombre del Producto', labelStyle: TextStyle(color: Colors.amberAccent, fontSize: 12), filled: true, fillColor: Colors.white10),
+                    ),
                     const Divider(color: Colors.white12),
                     TextField(
                       controller: cantCtrl,
@@ -538,17 +556,27 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       return;
                     }
                     if (nCant != null && nSku.isNotEmpty) {
-                      var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(nSku).get();
-                      if (masterDoc.exists) {
-                        updatedMasterData = masterDoc.data();
-                        currentDesc = updatedMasterData?['descripcion'] ?? currentDesc;
+                      var masterFound = await JerarquiaUbicacionHelper.buscarProductoMaestro(nSku);
+                      if (masterFound == null && eanCtrl.text.trim().isNotEmpty) {
+                        masterFound = await JerarquiaUbicacionHelper.buscarProductoMaestro(eanCtrl.text.trim());
                       }
+                      if (masterFound != null) {
+                        updatedMasterData = masterFound;
+                        if (masterFound['sku'] != null && masterFound['sku'].toString().trim().isNotEmpty) {
+                          nSku = masterFound['sku'].toString().trim();
+                        }
+                      }
+
+                      String descFinal = (updatedMasterData != null && updatedMasterData!['descripcion'] != null)
+                          ? updatedMasterData!['descripcion'].toString()
+                          : descCtrl.text.trim();
 
                       Map<String, dynamic> updateData = {
                         'cantidad': nCant,
                         'sku': nSku,
+                        'ean': eanCtrl.text.trim(),
                         'ubicacion': localUbi,
-                        'descripcion': currentDesc,
+                        'descripcion': descFinal,
                         'fechaCaducidad': Timestamp.fromDate(fechaEditada),
                       };
 
@@ -559,30 +587,26 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         updateData['misionBodega90d'] = FieldValue.delete();
                       }
 
-                      if (updatedMasterData != null) {
-                        updateData.addAll({
-                          'ean': updatedMasterData!['ean'] ?? '',
-                          'idProveedor': updatedMasterData!['idProveedor'],
-                          'nombreProveedor': updatedMasterData!['nombreProveedor'],
-                          'idCategoria': updatedMasterData!['idCategoria'],
-                          'nombreGpoArticulos': updatedMasterData!['nombreGpoArticulos'],
-                          'precioVenta': updatedMasterData!['precioVenta'],
-                          'oh': updatedMasterData!['oh'],
-                        });
-                      } else if (nSku != d['sku']) {
-                        updateData.addAll({
-                          'nombreProveedor': FieldValue.delete(),
-                          'nombreGpoArticulos': FieldValue.delete(),
-                          'precioVenta': FieldValue.delete(),
-                          'oh': FieldValue.delete(),
-                        });
-                      }
-
                       await docSnap.reference.update(updateData);
+
+                      // Propagar la actualización de SKU/UPC y Descripción a TODAS las instancias de este artículo en la tienda
+                      int totalInstancias = await JerarquiaUbicacionHelper.actualizarArticuloEnTodasLasInstancias(
+                        idTiendaGlobal: widget.idTiendaGlobal,
+                        codigoAnterior: skuOriginalLote,
+                        nuevoSku: nSku,
+                        nuevoEan: eanCtrl.text.trim(),
+                        nuevaDescripcion: descFinal,
+                        datosMaestros: updatedMasterData,
+                        usuarioActual: widget.usuarioActual,
+                      );
+
                       if (mounted) {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Registro actualizado con éxito'), backgroundColor: Colors.green),
+                          SnackBar(
+                            content: Text('✅ Registro guardado y actualizado en $totalInstancias lote(s) de la tienda.'),
+                            backgroundColor: Colors.green,
+                          ),
                         );
                       }
                     }
@@ -721,7 +745,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
             int dias = cad.difference(DateTime.now()).inDays;
 
-            bool coincideBusqueda = _busqueda.isEmpty || desc.contains(_busqueda) || sku.contains(_busqueda) || ean.contains(_busqueda);
+            bool coincideBusqueda = _busqueda.isEmpty ||
+                JerarquiaUbicacionHelper.coincideBusquedaInteligente(
+                  _busqueda,
+                  [data['descripcion']?.toString(), data['sku']?.toString(), data['ean']?.toString(), data['ubicacion']?.toString()],
+                );
             bool coincideProv = _filtroProveedor == null || prov == _filtroProveedor;
             bool coincideGpo = _filtroGrupo == null || gpo == _filtroGrupo;
             
