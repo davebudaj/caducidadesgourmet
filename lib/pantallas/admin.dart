@@ -1078,6 +1078,190 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) { debugPrint("Error descargando QR: $e"); }
   }
 
+  // Sincroniza inventario_activo y misiones_auditoria con un mapa en memoria recién cargado del CSV
+  Future<Map<String, int>> _sincronizarInventarioConMapaCatalogo(Map<String, Map<String, dynamic>> mapaCatalogo) async {
+    int lotesReparados = 0;
+    int lotesOhActualizado = 0;
+
+    Map<String, dynamic>? buscarEnMapa(String codigo) {
+      for (String cand in JerarquiaUbicacionHelper.generarVariantesCodigo(codigo)) {
+        if (mapaCatalogo.containsKey(cand)) return mapaCatalogo[cand];
+      }
+      return null;
+    }
+
+    var db = FirebaseFirestore.instance;
+    WriteBatch batch = db.batch();
+    int ops = 0;
+
+    Future<void> commitSiNecesario() async {
+      ops++;
+      if (ops >= 400) {
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+      }
+    }
+
+    // 1. Revisar todos los lotes en inventario_activo de esta tienda
+    var invSnap = await _refTienda.collection('inventario_activo').get();
+    for (var doc in invSnap.docs) {
+      var d = doc.data();
+      String skuActual = (d['sku'] ?? '').toString().trim();
+      String eanActual = (d['ean'] ?? '').toString().trim();
+      String descActual = (d['descripcion'] ?? '').toString().trim();
+
+      Map<String, dynamic>? infoMaestra = buscarEnMapa(skuActual);
+      if (infoMaestra == null && eanActual.isNotEmpty) {
+        infoMaestra = buscarEnMapa(eanActual);
+      }
+
+      if (infoMaestra != null) {
+        bool eraMissing = descActual == 'Artículo Nuevo' ||
+            descActual == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' ||
+            descActual == 'Sin Nombre' ||
+            (d['nombreProveedor'] ?? 'ND') == 'ND' ||
+            skuActual != infoMaestra['sku'];
+
+        batch.update(doc.reference, {
+          'sku': infoMaestra['sku'],
+          'ean': infoMaestra['ean'],
+          'descripcion': infoMaestra['descripcion'],
+          'idProveedor': infoMaestra['idProveedor'],
+          'nombreProveedor': infoMaestra['nombreProveedor'],
+          'idCategoria': infoMaestra['idCategoria'],
+          'nombreGpoArticulos': infoMaestra['nombreGpoArticulos'],
+          'precioVenta': infoMaestra['precioVenta'],
+          'oh': infoMaestra['oh'],
+        });
+        await commitSiNecesario();
+
+        if (eraMissing) {
+          lotesReparados++;
+        } else {
+          lotesOhActualizado++;
+        }
+      }
+    }
+
+    // 2. Revisar también misiones_auditoria pendientes para que no se queden con el código viejo o como "Artículo Nuevo"
+    var misSnap = await _refTienda.collection('misiones_auditoria').where('estado', isEqualTo: 'pendiente').get();
+    for (var mDoc in misSnap.docs) {
+      var m = mDoc.data();
+      String mSku = (m['sku'] ?? '').toString().trim();
+      Map<String, dynamic>? infoMaestra = buscarEnMapa(mSku);
+      if (infoMaestra != null) {
+        batch.update(mDoc.reference, {
+          'sku': infoMaestra['sku'],
+          'descripcion': infoMaestra['descripcion'],
+          'nombreProveedor': infoMaestra['nombreProveedor'],
+          'nombreGpoArticulos': infoMaestra['nombreGpoArticulos'],
+        });
+        await commitSiNecesario();
+      }
+    }
+
+    if (ops > 0) await batch.commit();
+    return {'reparados': lotesReparados, 'actualizados': lotesOhActualizado};
+  }
+
+  // Botón rápido para reparar "Artículo Nuevo" consultando directamente la colección maestro_productos actual
+  Future<void> _repararArticulosNuevosConBD() async {
+    setState(() {
+      _procesando = true;
+      _estado = 'Buscando match en la Base de Datos para los "Artículo Nuevo"...';
+    });
+
+    try {
+      var invSnap = await _refTienda.collection('inventario_activo').get();
+      var misSnap = await _refTienda.collection('misiones_auditoria').where('estado', isEqualTo: 'pendiente').get();
+
+      var db = FirebaseFirestore.instance;
+      WriteBatch batch = db.batch();
+      int ops = 0;
+      int reparados = 0;
+      int sinMatch = 0;
+
+      Future<void> commitSiNecesario() async {
+        ops++;
+        if (ops >= 400) {
+          await batch.commit();
+          batch = db.batch();
+          ops = 0;
+        }
+      }
+
+      for (var doc in invSnap.docs) {
+        var d = doc.data();
+        String skuActual = (d['sku'] ?? '').toString().trim();
+        String eanActual = (d['ean'] ?? '').toString().trim();
+        String descActual = (d['descripcion'] ?? '').toString().trim();
+        String provActual = (d['nombreProveedor'] ?? 'ND').toString().trim();
+
+        bool necesitaMatch = descActual == 'Artículo Nuevo' ||
+            descActual == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' ||
+            descActual == 'Sin Nombre' ||
+            provActual == 'ND' ||
+            skuActual.length >= 11; // Códigos UPC/EAN guardados como SKU
+
+        if (!necesitaMatch) continue;
+
+        Map<String, dynamic>? master = await JerarquiaUbicacionHelper.buscarProductoMaestro(skuActual);
+        if (master == null && eanActual.isNotEmpty) {
+          master = await JerarquiaUbicacionHelper.buscarProductoMaestro(eanActual);
+        }
+
+        if (master != null && master['sku'] != null && master['sku'].toString().trim().isNotEmpty) {
+          batch.update(doc.reference, {
+            'sku': master['sku'].toString().trim(),
+            'ean': (master['ean'] ?? eanActual).toString().trim(),
+            'descripcion': master['descripcion'] ?? descActual,
+            'idProveedor': master['idProveedor'],
+            'nombreProveedor': master['nombreProveedor'] ?? 'ND',
+            'idCategoria': master['idCategoria'],
+            'nombreGpoArticulos': master['nombreGpoArticulos'] ?? 'SIN GRUPO',
+            'precioVenta': master['precioVenta'] ?? '0',
+            'oh': master['oh'] ?? '0',
+          });
+          await commitSiNecesario();
+          reparados++;
+        } else {
+          sinMatch++;
+        }
+      }
+
+      for (var mDoc in misSnap.docs) {
+        var m = mDoc.data();
+        String mSku = (m['sku'] ?? '').toString().trim();
+        String mDesc = (m['descripcion'] ?? '').toString().trim();
+        if (mDesc == 'Artículo Nuevo' || mDesc == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' || mSku.length >= 11) {
+          var master = await JerarquiaUbicacionHelper.buscarProductoMaestro(mSku);
+          if (master != null && master['sku'] != null) {
+            batch.update(mDoc.reference, {
+              'sku': master['sku'].toString().trim(),
+              'descripcion': master['descripcion'] ?? mDesc,
+              'nombreProveedor': master['nombreProveedor'] ?? 'ND',
+              'nombreGpoArticulos': master['nombreGpoArticulos'] ?? 'SIN GRUPO',
+            });
+            await commitSiNecesario();
+          }
+        }
+      }
+
+      if (ops > 0) await batch.commit();
+
+      setState(() {
+        _procesando = false;
+        _estado = '✅ Match finalizado:\n$reparados lotes "Artículo Nuevo" actualizados con su SKU y Descripción real.\n($sinMatch lotes aún no existen en el Catálogo Maestro).';
+      });
+    } catch (e) {
+      setState(() {
+        _procesando = false;
+        _estado = 'Error al reparar artículos: $e';
+      });
+    }
+  }
+
   Future<void> _cargarCatalogoMaestroZona9() async {
     try {
       var metaDoc = await FirebaseFirestore.instance.collection('sistema').doc('catalogo_metadata').get();
@@ -1127,6 +1311,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         var db = FirebaseFirestore.instance;
         WriteBatch lote = db.batch(); 
         int contadorSubidas = 0; int operacionesEnLote = 0;
+        Map<String, Map<String, dynamic>> mapaCatalogoLocal = {};
 
         for (var i = 7; i < filas.length; i++) {
           if (filas[i].trim().isEmpty) continue;
@@ -1157,11 +1342,17 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             
             if (ean.isNotEmpty && ean != "0" && ean != "NaN") { 
                lote.set(db.collection('maestro_productos').doc(ean), dataProducto); 
-               operacionesEnLote++; contadorSubidas++; 
+               operacionesEnLote++; contadorSubidas++;
+               for (String v in JerarquiaUbicacionHelper.generarVariantesCodigo(ean)) {
+                 mapaCatalogoLocal[v] = dataProducto;
+               }
             }
             if (sku.isNotEmpty && sku != "NaN") { 
                lote.set(db.collection('maestro_productos').doc(sku), dataProducto); 
-               operacionesEnLote++; contadorSubidas++; 
+               operacionesEnLote++; contadorSubidas++;
+               for (String v in JerarquiaUbicacionHelper.generarVariantesCodigo(sku)) {
+                 mapaCatalogoLocal[v] = dataProducto;
+               }
             }
             
             if (operacionesEnLote >= 450) { await lote.commit(); lote = db.batch(); operacionesEnLote = 0; }
@@ -1169,6 +1360,12 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         }
         
         if (operacionesEnLote > 0) { await lote.commit(); }
+
+        setState(() {
+          _estado = "Catálogo subido. Haciendo Match automático con 'Artículo Nuevo' y actualizando OH en Sábana...";
+        });
+
+        Map<String, int> syncRes = await _sincronizarInventarioConMapaCatalogo(mapaCatalogoLocal);
         
         await FirebaseFirestore.instance.collection('sistema').doc('catalogo_metadata').set({
           'ultima_carga': FieldValue.serverTimestamp(),
@@ -1176,7 +1373,10 @@ class _PantallaAdminState extends State<PantallaAdmin> {
         });
         await _obtenerUltimaActualizacion();
 
-        setState(() { _procesando = false; _estado = "Catálogo Actualizado Exitosamente!\nSe mapearon $contadorSubidas SKUs con el OH de ${widget.nombreTienda}."; });
+        setState(() {
+          _procesando = false;
+          _estado = "¡Catálogo Actualizado Exitosamente!\nSe mapearon $contadorSubidas SKUs.\n🔄 Match automático en Sábana: ${syncRes['reparados']} 'Artículo Nuevo' reparados y ${syncRes['actualizados']} lotes con OH actualizado.";
+        });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en Catálogo:\n$e"; }); }
   }
@@ -1330,6 +1530,20 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                       SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white), icon: const Icon(Icons.upload_file), label: const Text('1. SUBIR CATÁLOGO ZONAL'), onPressed: _cargarCatalogoMaestroZona9)),
                       const SizedBox(height: 5),
                       Text(_ultimaActualizacion, style: const TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 40,
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.cyanAccent,
+                            side: const BorderSide(color: Colors.cyanAccent),
+                          ),
+                          icon: const Icon(Icons.auto_fix_high, size: 18),
+                          label: const Text('REPARAR "ARTÍCULO NUEVO" (HACER MATCH CON BD)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                          onPressed: _repararArticulosNuevosConBD,
+                        ),
+                      ),
                     ],
                   ),
                 ),

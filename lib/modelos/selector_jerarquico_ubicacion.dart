@@ -1,6 +1,42 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 class JerarquiaUbicacionHelper {
+  static List<String> generarVariantesCodigo(String codigoRaw) {
+    String limpio = codigoRaw.trim();
+    if (limpio.isEmpty) return [];
+    String sinCeros = limpio.replaceFirst(RegExp(r'^0+'), '');
+    return <String>{
+      limpio,
+      if (sinCeros.isNotEmpty) sinCeros,
+      if (sinCeros.isNotEmpty) '0$sinCeros',
+      if (sinCeros.isNotEmpty) '00$sinCeros',
+    }.toList();
+  }
+
+  static Future<Map<String, dynamic>?> buscarProductoMaestro(String codigoRaw) async {
+    List<String> candidatos = generarVariantesCodigo(codigoRaw);
+    if (candidatos.isEmpty) return null;
+    var col = FirebaseFirestore.instance.collection('maestro_productos');
+
+    // 1. Buscar por ID directo de documento (EAN o SKU)
+    for (String cand in candidatos) {
+      var doc = await col.doc(cand).get();
+      if (doc.exists && doc.data() != null) return doc.data();
+    }
+    // 2. Respaldo por campo interno 'ean'
+    for (String cand in candidatos) {
+      var qEan = await col.where('ean', isEqualTo: cand).limit(1).get();
+      if (qEan.docs.isNotEmpty) return qEan.docs.first.data();
+    }
+    // 3. Respaldo por campo interno 'sku'
+    for (String cand in candidatos) {
+      var qSku = await col.where('sku', isEqualTo: cand).limit(1).get();
+      if (qSku.docs.isNotEmpty) return qSku.docs.first.data();
+    }
+    return null;
+  }
+
   static List<String> descomponerRuta(String raw) {
     String limpia = raw.trim();
     if (limpia.isEmpty) return ['SIN UBICACIÓN'];

@@ -65,22 +65,11 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   }
 
   Future<String> _obtenerSkuOficial(String codigo) async {
-    var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigo).get();
-    if (doc.exists) {
-      var data = doc.data();
-      if (data != null && data['sku'] != null && data['sku'].toString().trim().isNotEmpty) {
-        return data['sku'].toString().trim();
-      }
-    } else {
-      var qEan = await FirebaseFirestore.instance.collection('maestro_productos').where('ean', isEqualTo: codigo).limit(1).get();
-      if (qEan.docs.isNotEmpty) {
-        var data = qEan.docs.first.data();
-        if (data['sku'] != null && data['sku'].toString().trim().isNotEmpty) {
-          return data['sku'].toString().trim();
-        }
-      }
+    var data = await JerarquiaUbicacionHelper.buscarProductoMaestro(codigo);
+    if (data != null && data['sku'] != null && data['sku'].toString().trim().isNotEmpty) {
+      return data['sku'].toString().trim();
     }
-    return codigo;
+    return codigo.trim();
   }
 
   Future<void> _irATrasvaseMasivo({String? ubicacionInicial, String? skuFiltroInicial}) async {
@@ -1177,13 +1166,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
   Future<void> _buscarDatosOriginales() async {
     try {
       String codigo = widget.skuEscaneado.trim();
-      var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigo).get();
-      if (!doc.exists) {
-        var qEan = await FirebaseFirestore.instance.collection('maestro_productos').where('ean', isEqualTo: codigo).limit(1).get();
-        if (qEan.docs.isNotEmpty) _datosMaestros = qEan.docs.first.data();
-      } else {
-        _datosMaestros = doc.data();
-      }
+      _datosMaestros = await JerarquiaUbicacionHelper.buscarProductoMaestro(codigo);
       if (mounted) {
         setState(() {
           if (_datosMaestros != null) {

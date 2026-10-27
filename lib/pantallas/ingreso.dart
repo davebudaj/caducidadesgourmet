@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 
 class PantallaIngreso extends StatefulWidget {
   final String usuario;
@@ -57,22 +58,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     String gpo = 'SIN GRUPO';
     Map<String, dynamic>? masterData;
 
-    // 1. Buscar en el Catálogo Maestro por ID de documento (funciona para SKU y UPC)
-    var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigo).get();
-    if (doc.exists) {
-      masterData = doc.data();
-    } else {
-      // 2. Respaldo por si el UPC está guardado como campo interno
-      var qEan = await FirebaseFirestore.instance.collection('maestro_productos').where('ean', isEqualTo: codigo).limit(1).get();
-      if (qEan.docs.isNotEmpty) {
-        masterData = qEan.docs.first.data();
-      } else {
-        var qSku = await FirebaseFirestore.instance.collection('maestro_productos').where('sku', isEqualTo: codigo).limit(1).get();
-        if (qSku.docs.isNotEmpty) {
-          masterData = qSku.docs.first.data();
-        }
-      }
-    }
+    masterData = await JerarquiaUbicacionHelper.buscarProductoMaestro(codigo);
 
     if (masterData != null) {
       // Conversión automática de UPC a SKU Oficial

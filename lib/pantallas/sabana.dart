@@ -48,12 +48,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   Future<String> _traducirCodigoASku(String codigo) async {
     String limpio = codigo.trim();
     if (limpio.isEmpty) return limpio;
-    var doc = await FirebaseFirestore.instance.collection('maestro_productos').doc(limpio).get();
-    if (doc.exists) {
-      var d = doc.data();
-      if (d != null && d['sku'] != null && d['sku'].toString().trim().isNotEmpty) {
-        return d['sku'].toString().trim();
-      }
+    var d = await JerarquiaUbicacionHelper.buscarProductoMaestro(limpio);
+    if (d != null && d['sku'] != null && d['sku'].toString().trim().isNotEmpty) {
+      return d['sku'].toString().trim();
     }
     return limpio;
   }
@@ -400,9 +397,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                   setDialogState(() => currentDesc = "Buscando...");
                   try {
                     String codigoEscrito = skuCtrl.text.trim();
-                    var masterDoc = await FirebaseFirestore.instance.collection('maestro_productos').doc(codigoEscrito).get();
-                    if (masterDoc.exists) {
-                      updatedMasterData = masterDoc.data();
+                    var masterDataFound = await JerarquiaUbicacionHelper.buscarProductoMaestro(codigoEscrito);
+                    if (masterDataFound != null) {
+                      updatedMasterData = masterDataFound;
                       if (updatedMasterData?['sku'] != null && updatedMasterData!['sku'].toString().trim().isNotEmpty) {
                         skuCtrl.text = updatedMasterData!['sku'].toString().trim();
                       }
