@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 class FinanzasService {
-  // Incrementa en tiempo real el resumen mensual y anual sin recalcular todo el historial
   static void actualizarResumenEnBatch({
     required WriteBatch batch,
     required String idTiendaGlobal,
@@ -102,6 +101,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
 
         int cant = (h['cantidadTratada'] ?? 0) as int;
         double costo = double.tryParse((h['costoTotal'] ?? 0).toString()) ?? 0.0;
+        if (costo <= 0) continue;
 
         acumuladoPorAnio.putIfAbsent(anio, () => {'anio': anio});
         var mapa = acumuladoPorAnio[anio]!;
@@ -131,6 +131,205 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     } finally {
       if (!silencioso && mounted) setState(() => _sincronizando = false);
     }
+  }
+
+  Future<void> _mostrarDiagnosticoEjecutivoIA() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+    );
+
+    try {
+      var results = await Future.wait([
+        _refTienda.collection('inventario_activo').get(),
+        _refTienda.collection('resumen_financiero').get(),
+      ]);
+      var invDocs = results[0].docs;
+      var resDocs = results[1].docs;
+
+      DateTime hoy = DateTime.now();
+      double montoCritico15d = 0;
+      int lotesCriticos15d = 0;
+      int lotesBodega90d = 0;
+      double montoBodega90d = 0;
+      int lotesArticulosNuevos = 0;
+      int lotesEdicionTemporal = 0;
+      Map<String, double> riesgoCriticoPorProv = {};
+      Map<String, double> riesgoPorUbicacion = {};
+
+      for (var doc in invDocs) {
+        var d = doc.data();
+        Timestamp? ts = d['fechaCaducidad'];
+        int cant = (d['cantidad'] ?? 0) as int;
+        double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
+        double valor = cant * precio;
+        String ubi = (d['ubicacion'] ?? 'ND').toString();
+        String prov = (d['nombreProveedor'] ?? 'ND').toString();
+        String desc = (d['descripcion'] ?? '').toString();
+
+        if (desc == 'Artículo Nuevo' || desc == 'ARTÍCULO NUEVO / NO EN CATÁLOGO') {
+          lotesArticulosNuevos++;
+        } else if (d['edicionTemporal'] == true) {
+          lotesEdicionTemporal++;
+        }
+
+        if (ts != null) {
+          int dias = ts.toDate().difference(hoy).inDays;
+          if (dias <= 15) {
+            lotesCriticos15d++;
+            montoCritico15d += valor;
+            riesgoCriticoPorProv[prov] = (riesgoCriticoPorProv[prov] ?? 0) + valor;
+            riesgoPorUbicacion[ubi] = (riesgoPorUbicacion[ubi] ?? 0) + valor;
+          }
+          if (ubi.toUpperCase().contains('BODEGA') && dias <= 90 && dias > 0) {
+            lotesBodega90d++;
+            montoBodega90d += valor;
+          }
+        }
+      }
+
+      double mermaAnual = 0, promoAnual = 0, devAnual = 0;
+      for (var rDoc in resDocs) {
+        if (rDoc.id == '${hoy.year}') {
+          var r = rDoc.data();
+          mermaAnual = double.tryParse((r['anual_monto_merma'] ?? 0).toString()) ?? 0.0;
+          promoAnual = double.tryParse((r['anual_monto_promo'] ?? 0).toString()) ?? 0.0;
+          devAnual = double.tryParse((r['anual_monto_dev'] ?? 0).toString()) ?? 0.0;
+        }
+      }
+
+      double totalSalidas = mermaAnual + promoAnual + devAnual;
+      double tasaRescate = totalSalidas > 0 ? ((promoAnual + devAnual) / totalSalidas) * 100 : 100.0;
+
+      var topProvsCriticos = riesgoCriticoPorProv.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      var topUbisCriticas = riesgoPorUbicacion.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+
+      String provFoco = topProvsCriticos.isNotEmpty
+          ? '${topProvsCriticos.first.key} (MXN ${topProvsCriticos.first.value.toStringAsFixed(2)})'
+          : 'Sin proveedores en riesgo crítico';
+      String ubiFoco = topUbisCriticas.isNotEmpty ? topUbisCriticas.first.key : 'Ninguna ubicación crítica';
+
+      if (!mounted) return;
+      Navigator.pop(context);
+
+      String detalleCritico = lotesCriticos15d > 0
+          ? 'Tienes $lotesCriticos15d lote(s) en ventana crítica por MXN ${montoCritico15d.toStringAsFixed(2)}.\n• Mayor concentración en: $ubiFoco.\n• Proveedor clave a gestionar hoy: $provFoco.'
+          : '¡Excelente control! No tienes ningún lote en ventana crítica ≤ 15 días.';
+
+      String consejoRescate = tasaRescate < 60
+          ? '💡 Recomendación IA: Adelanta la etiqueta de 50% de descuento desde el aviso de 45 días para reducir la proporción de merma.'
+          : '💡 Excelente balance: La tienda rescata la mayoría del valor antes del vencimiento.';
+
+      String detalleFinanciero = totalSalidas > 0
+          ? 'Tasa de recuperación actual: ${tasaRescate.toStringAsFixed(1)}% (Rescatado en Promoción/Devolución: MXN ${(promoAnual + devAnual).toStringAsFixed(2)} vs Merma: MXN ${mermaAnual.toStringAsFixed(2)}).\n$consejoRescate'
+          : 'Aún no hay bajas con costo registradas en el año en curso.';
+
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.cyanAccent, width: 2)),
+          title: const Row(
+            children: [
+              Icon(Icons.auto_awesome, color: Colors.cyanAccent, size: 24),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Asistente Ejecutivo IA • Diagnóstico', style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _tarjetaInsightIA(
+                    icono: Icons.local_fire_department,
+                    color: Colors.redAccent,
+                    titulo: '1. Prioridad Crítica Hoy (≤ 15 Días)',
+                    detalle: detalleCritico,
+                  ),
+                  const SizedBox(height: 10),
+                  _tarjetaInsightIA(
+                    icono: Icons.warehouse,
+                    color: Colors.pinkAccent,
+                    titulo: '2. Flujo de Bodega a Piso (Política 90 Días)',
+                    detalle: lotesBodega90d > 0
+                        ? 'Se detectaron $lotesBodega90d lote(s) en BODEGA con menos de 90 días de vida (MXN ${montoBodega90d.toStringAsFixed(2)}). Se recomienda usar Trasvase Masivo hoy para exhibirlos en Piso/Display.'
+                        : 'Bodega saludable: Todos los lotes en bodega superan los 90 días de margen.',
+                  ),
+                  const SizedBox(height: 10),
+                  _tarjetaInsightIA(
+                    icono: Icons.trending_up,
+                    color: Colors.greenAccent,
+                    titulo: '3. Eficiencia de Rescate Financiero (${hoy.year})',
+                    detalle: detalleFinanciero,
+                  ),
+                  const SizedBox(height: 10),
+                  _tarjetaInsightIA(
+                    icono: Icons.qr_code_2,
+                    color: Colors.purpleAccent,
+                    titulo: '4. Integridad de Catálogo y Ediciones Temporales',
+                    detalle: '• Artículos Nuevos pendientes de validar en anaquel: $lotesArticulosNuevos lote(s).\n• Lotes con Edición Temporal en espera de alta en SAP: $lotesEdicionTemporal lote(s).',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            if (lotesCriticos15d > 0)
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.orangeAccent, side: const BorderSide(color: Colors.orangeAccent)),
+                icon: const Icon(Icons.filter_list, size: 16),
+                label: const Text('VER CRÍTICOS EN SÁBANA', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  widget.onFiltroSeleccionado('critico');
+                },
+              ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('ENTENDIDO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error generando diagnóstico IA: $e')));
+      }
+    }
+  }
+
+  Widget _tarjetaInsightIA({required IconData icono, required Color color, required String titulo, required String detalle}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icono, color: color, size: 18),
+              const SizedBox(width: 6),
+              Expanded(child: Text(titulo, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12))),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(detalle, style: const TextStyle(color: Colors.white, fontSize: 11, height: 1.35)),
+        ],
+      ),
+    );
   }
 
   void _cambiarMes(int delta) {
@@ -191,6 +390,19 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       appBar: AppBar(
         title: const Text('Salud e Impacto Financiero', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.cyanAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+              icon: const Icon(Icons.auto_awesome, size: 16),
+              label: const Text('DIAGNÓSTICO IA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+              onPressed: _mostrarDiagnosticoEjecutivoIA,
+            ),
+          ),
           IconButton(
             icon: _sincronizando
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber))
@@ -293,7 +505,6 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
               builder: (context, invSnap) {
                 if (!invSnap.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
 
-                // Lee únicamente los documentos pre-calculados de resumen_financiero (1 doc por año)
                 return StreamBuilder<QuerySnapshot>(
                   stream: _refTienda.collection('resumen_financiero').snapshots(),
                   builder: (context, resSnap) {
@@ -331,7 +542,6 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                       riesgoPorProveedor[prov] = (riesgoPorProveedor[prov] ?? 0) + valor;
                     }
 
-                    // Lectura ultrarrápida desde el resumen pre-calculado en BD
                     double montoMerma = 0, montoPromo = 0, montoDevolucion = 0;
                     int pzasMerma = 0, pzasPromo = 0, pzasDevolucion = 0;
 

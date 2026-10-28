@@ -415,15 +415,20 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   void _dialogoValidarArticuloNuevo(QueryDocumentSnapshot docMision, Map<String, dynamic> m) {
     String codigoOriginal = (m['sku'] ?? '').toString().trim();
     String ubi = JerarquiaUbicacionHelper.formatearRutaVisual(m['ubicacion']?.toString());
+    String descActual = (m['descripcion'] ?? '').toString().trim();
+    bool esPlaceholder = descActual.isEmpty ||
+        descActual.toLowerCase().contains('artículo nuevo') ||
+        descActual.toLowerCase().contains('articulo nuevo') ||
+        descActual.toLowerCase().contains('sin nombre');
 
     TextEditingController skuOficialCtrl = TextEditingController(text: codigoOriginal);
     TextEditingController upcCtrl = TextEditingController(text: (m['ean'] ?? (codigoOriginal.length >= 11 ? codigoOriginal : '')).toString());
-    TextEditingController descCtrl = TextEditingController(
-      text: (m['descripcion'] != null && m['descripcion'] != 'Artículo Nuevo') ? m['descripcion'].toString() : '',
-    );
+    TextEditingController descCtrl = TextEditingController(text: esPlaceholder ? '' : descActual);
 
     Map<String, dynamic>? datosMaestrosEncontrados;
-    String mensajeEstado = 'Ve a la ubicación física, revisa el producto y escribe o escanea su SKU oficial de SAP (o su nombre):';
+    List<Map<String, dynamic>> sugerenciasCatalogo = [];
+    bool buscandoPorNombre = false;
+    String mensajeEstado = 'Ingresa el SKU de SAP o escribe parte del nombre abajo y toca la lupa para buscarlo en el catálogo:';
     bool guardando = false;
 
     showDialog(
@@ -436,19 +441,59 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
             if (res != null) {
               setModalState(() {
                 datosMaestrosEncontrados = res;
+                sugerenciasCatalogo.clear();
                 if (res['sku'] != null && res['sku'].toString().trim().isNotEmpty) {
                   skuOficialCtrl.text = res['sku'].toString().trim();
                 }
-                if (res['ean'] != null && res['ean'].toString().trim().isNotEmpty) {
+                if (res['ean'] != null && res['ean'].toString().trim().isNotEmpty && upcCtrl.text.trim().isEmpty) {
                   upcCtrl.text = res['ean'].toString().trim();
                 }
                 descCtrl.text = (res['descripcion'] ?? '').toString();
-                mensajeEstado = '✅ ¡Match encontrado en Catálogo Maestro! (${res['nombreProveedor'] ?? 'ND'})';
+                mensajeEstado = '✅ ¡Match encontrado en Catálogo SAP! (${res['nombreProveedor'] ?? 'ND'})';
               });
             } else {
               setModalState(() {
                 datosMaestrosEncontrados = null;
-                mensajeEstado = 'ℹ️ Ese código no está en el CSV de la Zona. Escribe abajo el nombre del artículo para identificarlo en todo el sistema.';
+                mensajeEstado = 'ℹ️ Ese código no está en el catálogo. Puedes buscarlo por nombre en el 3er campo o escribir su descripción.';
+              });
+            }
+          }
+
+          Future<void> buscarEnCatalogoPorNombre(String texto) async {
+            String q = texto.trim();
+            if (q.length < 2) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Escribe al menos 2 letras del nombre para buscar en el catálogo.')),
+              );
+              return;
+            }
+            setModalState(() {
+              buscandoPorNombre = true;
+              mensajeEstado = 'Buscando "$q" en el Catálogo Maestro...';
+            });
+
+            try {
+              var snap = await FirebaseFirestore.instance.collection('maestro_productos').get();
+              Map<String, Map<String, dynamic>> unicosPorSku = {};
+              for (var doc in snap.docs) {
+                var d = doc.data();
+                String s = (d['sku'] ?? '').toString().trim();
+                if (s.isNotEmpty && !unicosPorSku.containsKey(s) && d['esTemporal'] != true) {
+                  unicosPorSku[s] = d;
+                }
+              }
+              var lista = JerarquiaUbicacionHelper.buscarSugerenciasSemanticasIA(q, unicosPorSku.values);
+              setModalState(() {
+                buscandoPorNombre = false;
+                sugerenciasCatalogo = lista;
+                mensajeEstado = lista.isNotEmpty
+                    ? '🧠 IA Semántica encontró ${lista.length} coincidencia(s) en SAP (ordenadas por similitud):'
+                    : '⚠️ No hay coincidencias en SAP para "$q". Al guardar quedará como Edición Temporal hasta que Corporativo lo dé de alta.';
+              });
+            } catch (e) {
+              setModalState(() {
+                buscandoPorNombre = false;
+                mensajeEstado = 'Error al buscar: $e';
               });
             }
           }
@@ -465,80 +510,139 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                 ),
               ],
             ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: Colors.amber.withOpacity(0.12), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber.withOpacity(0.5))),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('📍 Ubicación física: $ubi', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 12)),
-                        const SizedBox(height: 4),
-                        Text('Código capturado originalmente: $codigoOriginal', style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(mensajeEstado, style: TextStyle(color: datosMaestrosEncontrados != null ? Colors.greenAccent : Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: skuOficialCtrl,
-                    decoration: InputDecoration(
-                      labelText: 'SKU Oficial SAP (o código principal)',
-                      filled: true,
-                      fillColor: Colors.white10,
-                      border: const OutlineInputBorder(),
-                      suffixIcon: Row(
-                        mainAxisSize: MainAxisSize.min,
+            content: SizedBox(
+              width: 480,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: Colors.amber.withOpacity(0.12), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber.withOpacity(0.5))),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          IconButton(
-                            icon: const Icon(Icons.search, color: Colors.amber),
-                            tooltip: 'Buscar en Catálogo Maestro',
-                            onPressed: () => buscarMatchCodigo(skuOficialCtrl.text),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.qr_code_scanner, color: Colors.cyanAccent),
-                            tooltip: 'Escanear con cámara',
-                            onPressed: () async {
-                              String? escaneado = await Navigator.push(context, MaterialPageRoute(builder: (_) => const PantallaEscanerRapido()));
-                              if (escaneado != null && escaneado.trim().isNotEmpty) {
-                                skuOficialCtrl.text = escaneado.trim();
-                                await buscarMatchCodigo(escaneado.trim());
-                              }
-                            },
-                          ),
+                          Text('📍 Ubicación física: $ubi', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                          const SizedBox(height: 4),
+                          Text('Código capturado originalmente: $codigoOriginal', style: const TextStyle(color: Colors.white70, fontSize: 11)),
                         ],
                       ),
                     ),
-                    onSubmitted: buscarMatchCodigo,
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: upcCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'UPC / Código de Barras del Empaque (EAN)',
-                      filled: true,
-                      fillColor: Colors.white10,
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 10),
+                    Text(
+                      mensajeEstado,
+                      style: TextStyle(
+                        color: datosMaestrosEncontrados != null ? Colors.greenAccent : Colors.cyanAccent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: descCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Descripción / Nombre del Artículo',
-                      hintText: 'Ej. TÉ VERDE JAPONÉS ITO EN .500',
-                      filled: true,
-                      fillColor: Colors.white10,
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: skuOficialCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'SKU Oficial SAP (o código principal)',
+                        filled: true,
+                        fillColor: Colors.white10,
+                        border: const OutlineInputBorder(),
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.search, color: Colors.amber),
+                              tooltip: 'Buscar código en Catálogo Maestro',
+                              onPressed: () => buscarMatchCodigo(skuOficialCtrl.text),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.qr_code_scanner, color: Colors.cyanAccent),
+                              tooltip: 'Escanear con cámara',
+                              onPressed: () async {
+                                String? escaneado = await Navigator.push(context, MaterialPageRoute(builder: (_) => const PantallaEscanerRapido()));
+                                if (escaneado != null && escaneado.trim().isNotEmpty) {
+                                  skuOficialCtrl.text = escaneado.trim();
+                                  await buscarMatchCodigo(escaneado.trim());
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      onSubmitted: buscarMatchCodigo,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: upcCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'UPC / Código de Barras del Empaque (EAN)',
+                        filled: true,
+                        fillColor: Colors.white10,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: descCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Descripción / Nombre (o escribe para buscar en SAP)',
+                        hintText: 'Ej. TE VERDE, POCKY, RAMEN...',
+                        filled: true,
+                        fillColor: Colors.white10,
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: buscandoPorNombre
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber))
+                              : const Icon(Icons.manage_search, color: Colors.amber, size: 22),
+                          tooltip: 'Buscar por nombre en Catálogo SAP',
+                          onPressed: buscandoPorNombre ? null : () => buscarEnCatalogoPorNombre(descCtrl.text),
+                        ),
+                      ),
+                      onSubmitted: buscarEnCatalogoPorNombre,
+                    ),
+                    if (sugerenciasCatalogo.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 170),
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.amber.withOpacity(0.5)),
+                        ),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: sugerenciasCatalogo.length,
+                          itemBuilder: (c, idx) {
+                            var item = sugerenciasCatalogo[idx];
+                            return ListTile(
+                              dense: true,
+                              leading: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.purpleAccent.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.purpleAccent),
+                                ),
+                                child: Text('🧠 ${item['scoreIA'] ?? 90}%', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
+                              ),
+                              title: Text(item['descripcion'] ?? '', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                              subtitle: Text('SKU: ${item['sku']} • ${item['nombreProveedor'] ?? 'ND'}\nCoincidencia: ${item['razonIA'] ?? 'Semántica'}', style: const TextStyle(fontSize: 10, color: Colors.amberAccent)),
+                              onTap: () {
+                                setModalState(() {
+                                  datosMaestrosEncontrados = item;
+                                  skuOficialCtrl.text = (item['sku'] ?? '').toString().trim();
+                                  descCtrl.text = (item['descripcion'] ?? '').toString().trim();
+                                  sugerenciasCatalogo.clear();
+                                  mensajeEstado = '✅ Seleccionado: ${item['descripcion']} (SKU: ${item['sku']})';
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
             actions: [
@@ -566,9 +670,25 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                           skuNuevo = datosMaestrosEncontrados!['sku'].toString().trim();
                         }
 
-                        String descNueva = descCtrl.text.trim().isNotEmpty
-                            ? descCtrl.text.trim()
-                            : (datosMaestrosEncontrados?['descripcion']?.toString() ?? 'ARTÍCULO VALIDADO ($skuNuevo)');
+                        String textoDesc = descCtrl.text.trim();
+                        bool textoSiguePlaceholder = textoDesc.isEmpty ||
+                            textoDesc.toLowerCase().contains('artículo nuevo') ||
+                            textoDesc.toLowerCase().contains('articulo nuevo');
+
+                        String descNueva = (datosMaestrosEncontrados != null && datosMaestrosEncontrados!['descripcion'] != null)
+                            ? datosMaestrosEncontrados!['descripcion'].toString().trim()
+                            : (!textoSiguePlaceholder ? textoDesc : '');
+
+                        if (descNueva.isEmpty) {
+                          setModalState(() => guardando = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('⚠️ Escribe el nombre del artículo o selecciona uno del catálogo antes de guardar.'),
+                              backgroundColor: Colors.orange,
+                            ),
+                          );
+                          return;
+                        }
 
                         int actualizados = await JerarquiaUbicacionHelper.actualizarArticuloEnTodasLasInstancias(
                           idTiendaGlobal: widget.idTiendaGlobal,

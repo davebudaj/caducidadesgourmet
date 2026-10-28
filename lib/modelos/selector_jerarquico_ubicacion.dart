@@ -1,8 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class JerarquiaUbicacionHelper {
-  // Normaliza texto quitando acentos, diéresis, comas, puntos y apóstrofes para búsquedas rápidas
+  // Normaliza texto quitando acentos, diéresis, signos y exceso de espacios
   static String normalizarTextoBusqueda(String input) {
     if (input.isEmpty) return '';
     String s = input.toLowerCase();
@@ -17,8 +17,7 @@ class JerarquiaUbicacionHelper {
     mapaAcentos.forEach((k, v) {
       s = s.replaceAll(k, v);
     });
-    // Quitar comas, puntos, comillas simples/dobles y exceso de espacios
-    s = s.replaceAll(RegExp(r"[^a-z0-9\s]"), " ");
+    s = s.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
     s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
     return s;
   }
@@ -36,7 +35,210 @@ class JerarquiaUbicacionHelper {
     return true;
   }
 
-  // Actualiza el SKU, UPC/EAN y Descripción de un artículo en TODAS las instancias de la tienda y crea el puente en maestro_productos
+  // Diccionario de expansión semántica (Traduce nombres comerciales/inglés a abreviaturas SAP)
+  static const Map<String, List<String>> _diccionarioSemanticoSAP = {
+    'tea': ['te', 'beb', 'infusion'],
+    'te': ['tea', 'beb', 'infusion'],
+    'green': ['verde', 'vde', 'matcha'],
+    'verde': ['vde', 'green', 'matcha'],
+    'black': ['negro', 'neg'],
+    'milk': ['leche', 'lch'],
+    'strawberry': ['fresa', 'frsa'],
+    'fresa': ['frsa', 'strawberry'],
+    'chocolate': ['choc', 'choco', 'cacao'],
+    'choc': ['chocolate', 'choco'],
+    'cookie': ['galleta', 'gall', 'biscuit'],
+    'cookies': ['galleta', 'gall', 'biscuit'],
+    'galleta': ['gall', 'cookie'],
+    'galletas': ['gall', 'cookie'],
+    'cheese': ['queso', 'qso'],
+    'queso': ['qso', 'cheese'],
+    'spicy': ['picante', 'pic', 'hot', 'chile'],
+    'hot': ['picante', 'pic', 'spicy'],
+    'chicken': ['pollo', 'pll'],
+    'beef': ['res', 'carne'],
+    'shrimp': ['camaron', 'cam'],
+    'noodle': ['ramen', 'sopa', 'pasta', 'fideo'],
+    'noodles': ['ramen', 'sopa', 'pasta', 'fideo'],
+    'ramen': ['sopa', 'pasta', 'noodle', 'bowl', 'cup'],
+    'sauce': ['salsa', 'sls'],
+    'salsa': ['sls', 'sauce'],
+    'drink': ['bebida', 'beb', 'refresco', 'jugo'],
+    'bebida': ['beb', 'drink', 'jugo'],
+    'water': ['agua', 'mineral'],
+    'coffee': ['cafe', 'caf', 'soluble', 'liofilizado'],
+    'cafe': ['caf', 'coffee'],
+    'candy': ['dulce', 'dlc', 'gomita', 'caramelo'],
+    'gummy': ['gomita', 'gomitas', 'dulce'],
+    'gomitas': ['gomita', 'gummy', 'dulce'],
+    'chips': ['fritura', 'botana', 'papas', 'churro'],
+    'snack': ['botana', 'fritura'],
+    'peanut': ['cacahuate', 'cacahuates'],
+    'almond': ['almendra', 'almendras'],
+    'rice': ['arroz', 'arz'],
+    'seaweed': ['alga', 'nori'],
+    'japanese': ['japones', 'japon'],
+    'korean': ['coreano', 'coreana', 'corea'],
+  };
+
+  // Similitud de bigramas (Dice coefficient) para tolerar errores de dedo o abreviaturas
+  static double _similitudBigramas(String a, String b) {
+    if (a == b) return 1.0;
+    if (a.length < 2 || b.length < 2) return 0.0;
+    Set<String> bgA = {};
+    Set<String> bgB = {};
+    for (int i = 0; i < a.length - 1; i++) {
+      bgA.add(a.substring(i, i + 2));
+    }
+    for (int i = 0; i < b.length - 1; i++) {
+      bgB.add(b.substring(i, i + 2));
+    }
+    int interseccion = bgA.intersection(bgB).length;
+    return (2.0 * interseccion) / (bgA.length + bgB.length);
+  }
+
+  // MOTOR IA SEMÁNTICO: Busca coincidencias en el catálogo SAP entendiendo abreviaturas, inglés, gramajes y errores ortográficos
+  static List<Map<String, dynamic>> buscarSugerenciasSemanticasIA(
+    String consultaComercial,
+    Iterable<Map<String, dynamic>> catalogoCompleto,
+  ) {
+    String qNorm = normalizarTextoBusqueda(consultaComercial);
+    if (qNorm.isEmpty) return [];
+
+    List<String> tokensOriginales = qNorm
+        .split(' ')
+        .where((t) => t.length >= 2 && !['de', 'el', 'la', 'los', 'las', 'con', 'en', 'por', 'para', 'del', 'the', 'with', 'and'].contains(t))
+        .toList();
+
+    if (tokensOriginales.isEmpty) return [];
+
+    // Extraer posibles números de gramaje (ej. "500ml" -> "500", "140g" -> "140")
+    Set<String> numerosGramaje = {};
+    for (var m in RegExp(r'\d{2,4}').allMatches(consultaComercial)) {
+      numerosGramaje.add(m.group(0)!);
+    }
+
+    List<Map<String, dynamic>> resultadosConScore = [];
+
+    for (var prod in catalogoCompleto) {
+      if (prod['esTemporal'] == true) continue;
+      String desc = (prod['descripcion'] ?? '').toString();
+      String prov = (prod['nombreProveedor'] ?? '').toString();
+      String gpo = (prod['nombreGpoArticulos'] ?? '').toString();
+      String sku = (prod['sku'] ?? '').toString();
+
+      String textoProdNorm = normalizarTextoBusqueda('$desc $prov $gpo $sku');
+      List<String> tokensProd = textoProdNorm.split(' ').where((t) => t.isNotEmpty).toList();
+
+      double puntos = 0.0;
+      double maxPuntosPosibles = tokensOriginales.length * 10.0;
+      List<String> razones = [];
+
+      for (String tokenQ in tokensOriginales) {
+        // 1. Coincidencia directa o prefijo en SAP
+        if (tokensProd.any((tp) => tp == tokenQ || tp.startsWith(tokenQ) || tokenQ.startsWith(tp) && tp.length >= 3)) {
+          puntos += 10.0;
+          razones.add(tokenQ.toUpperCase());
+          continue;
+        }
+
+        // 2. Expansión por Diccionario Semántico IA (Inglés / Abreviaturas SAP)
+        List<String> sinonimos = _diccionarioSemanticoSAP[tokenQ] ?? [];
+        bool matchSinonimo = false;
+        for (String sin in sinonimos) {
+          if (tokensProd.any((tp) => tp == sin || tp.startsWith(sin))) {
+            puntos += 8.5;
+            razones.add('$tokenQ➔${sin.toUpperCase()}');
+            matchSinonimo = true;
+            break;
+          }
+        }
+        if (matchSinonimo) continue;
+
+        // 3. Coincidencia difusa (errores de dedo o palabras recortadas en SAP)
+        double mejorSim = 0.0;
+        for (String tp in tokensProd) {
+          double sim = _similitudBigramas(tokenQ, tp);
+          if (sim > mejorSim) mejorSim = sim;
+        }
+        if (mejorSim >= 0.55) {
+          puntos += 7.0 * mejorSim;
+        }
+      }
+
+      // 4. Bono por coincidencia de gramaje/presentación (.500, .140, .105)
+      for (String numG in numerosGramaje) {
+        if (desc.contains('.$numG') || textoProdNorm.contains(numG)) {
+          puntos += 4.5;
+          razones.add('${numG}g/ml');
+        }
+      }
+
+      if (puntos > 0) {
+        int porcentaje = ((puntos / (maxPuntosPosibles + (numerosGramaje.isNotEmpty ? 4.5 : 0.0))) * 100).round().clamp(15, 99);
+        if (porcentaje >= 30 || puntos >= 7.0) {
+          var copia = Map<String, dynamic>.from(prod);
+          copia['scoreIA'] = porcentaje;
+          copia['puntosRaw'] = puntos;
+          copia['razonIA'] = razones.isNotEmpty ? razones.take(4).join(' • ') : 'Similitud de nombre';
+          resultadosConScore.add(copia);
+        }
+      }
+    }
+
+    resultadosConScore.sort((a, b) {
+      double pA = (a['puntosRaw'] as double?) ?? 0.0;
+      double pB = (b['puntosRaw'] as double?) ?? 0.0;
+      return pB.compareTo(pA);
+    });
+
+    return resultadosConScore.take(15).toList();
+  }
+
+  static List<String> generarVariantesCodigo(String codigoRaw) {
+    String limpio = codigoRaw.trim();
+    if (limpio.isEmpty) return [];
+    String sinCeros = limpio.replaceFirst(RegExp(r'^0+'), '');
+    return <String>{
+      limpio,
+      if (sinCeros.isNotEmpty) sinCeros,
+      if (sinCeros.isNotEmpty) '0$sinCeros',
+      if (sinCeros.isNotEmpty) '00$sinCeros',
+    }.toList();
+  }
+
+  static Future<Map<String, dynamic>?> buscarProductoMaestro(String codigoRaw, {bool soloOficialSAP = false}) async {
+    List<String> candidatos = generarVariantesCodigo(codigoRaw);
+    if (candidatos.isEmpty) return null;
+    var col = FirebaseFirestore.instance.collection('maestro_productos');
+
+    for (String cand in candidatos) {
+      var doc = await col.doc(cand).get();
+      if (doc.exists && doc.data() != null) {
+        var d = doc.data()!;
+        if (soloOficialSAP && d['esTemporal'] == true) continue;
+        return d;
+      }
+    }
+    for (String cand in candidatos) {
+      var qEan = await col.where('ean', isEqualTo: cand).limit(1).get();
+      if (qEan.docs.isNotEmpty) {
+        var d = qEan.docs.first.data();
+        if (soloOficialSAP && d['esTemporal'] == true) continue;
+        return d;
+      }
+    }
+    for (String cand in candidatos) {
+      var qSku = await col.where('sku', isEqualTo: cand).limit(1).get();
+      if (qSku.docs.isNotEmpty) {
+        var d = qSku.docs.first.data();
+        if (soloOficialSAP && d['esTemporal'] == true) continue;
+        return d;
+      }
+    }
+    return null;
+  }
+
   static Future<int> actualizarArticuloEnTodasLasInstancias({
     required String idTiendaGlobal,
     required String codigoAnterior,
@@ -51,18 +253,28 @@ class JerarquiaUbicacionHelper {
 
     String skuFinal = nuevoSku.trim();
     String codigoViejo = codigoAnterior.trim();
-    // Si antes tenía un código largo tipo UPC/EAN (11-14 dígitos) y ahora ponen el SKU de SAP, conservamos ese UPC como EAN
+
+    bool esMatchOficialSAP = datosMaestros != null &&
+        datosMaestros['esTemporal'] != true &&
+        datosMaestros['nombreProveedor'] != null &&
+        datosMaestros['nombreProveedor'] != 'POR ASIGNAR' &&
+        datosMaestros['nombreProveedor'] != 'EDICIÓN TEMPORAL (PENDIENTE SAP)';
+
     String eanFinal = (nuevoEan != null && nuevoEan.trim().isNotEmpty)
         ? nuevoEan.trim()
         : (datosMaestros?['ean']?.toString().trim() ?? (codigoViejo.length >= 11 && codigoViejo != skuFinal ? codigoViejo : ''));
 
-    String descFinal = (nuevaDescripcion != null && nuevaDescripcion.trim().isNotEmpty && nuevaDescripcion.trim() != 'Artículo Nuevo')
-        ? nuevaDescripcion.trim().toUpperCase()
-        : (datosMaestros?['descripcion']?.toString().trim() ?? 'SIN NOMBRE');
+    String descFinal = (esMatchOficialSAP && datosMaestros!['descripcion'] != null)
+        ? datosMaestros['descripcion'].toString().trim()
+        : ((nuevaDescripcion != null && nuevaDescripcion.trim().isNotEmpty && nuevaDescripcion.trim() != 'Artículo Nuevo')
+            ? nuevaDescripcion.trim().toUpperCase()
+            : (datosMaestros?['descripcion']?.toString().trim() ?? 'SIN NOMBRE'));
 
     WriteBatch batch = db.batch();
     int ops = 0;
     int lotesActualizados = 0;
+    int totalPiezasAfectadas = 0;
+    String primeraUbicacion = 'TIENDA';
 
     Future<void> checkBatch() async {
       ops++;
@@ -73,17 +285,18 @@ class JerarquiaUbicacionHelper {
       }
     }
 
-    // 1. Guardar puente en maestro_productos para que futuros escaneos de este UPC o SKU hagan match automático
     Map<String, dynamic> fichaMaestra = {
       'sku': skuFinal,
       'ean': eanFinal,
       'descripcion': descFinal,
-      'idProveedor': datosMaestros?['idProveedor'] ?? 'ND',
-      'nombreProveedor': datosMaestros?['nombreProveedor'] ?? 'POR ASIGNAR',
-      'idCategoria': datosMaestros?['idCategoria'] ?? 'ND',
-      'nombreGpoArticulos': datosMaestros?['nombreGpoArticulos'] ?? 'SIN GRUPO',
-      'precioVenta': datosMaestros?['precioVenta'] ?? '0',
-      'oh': datosMaestros?['oh'] ?? '0',
+      'idProveedor': esMatchOficialSAP ? (datosMaestros!['idProveedor'] ?? 'ND') : 'TEMP',
+      'nombreProveedor': esMatchOficialSAP ? (datosMaestros!['nombreProveedor'] ?? 'ND') : 'EDICIÓN TEMPORAL (PENDIENTE SAP)',
+      'idCategoria': esMatchOficialSAP ? (datosMaestros!['idCategoria'] ?? 'ND') : 'TEMP',
+      'nombreGpoArticulos': esMatchOficialSAP ? (datosMaestros!['nombreGpoArticulos'] ?? 'SIN GRUPO') : 'EDICIÓN TEMPORAL',
+      'precioVenta': esMatchOficialSAP ? (datosMaestros!['precioVenta'] ?? '0') : '0',
+      'oh': esMatchOficialSAP ? (datosMaestros!['oh'] ?? '0') : '0',
+      'esTemporal': !esMatchOficialSAP,
+      'codigoOriginalCapturado': codigoViejo,
     };
 
     if (skuFinal.isNotEmpty) {
@@ -99,27 +312,40 @@ class JerarquiaUbicacionHelper {
       await checkBatch();
     }
 
-    // 2. Actualizar TODAS las instancias en inventario_activo
     var invSnap = await refTienda.collection('inventario_activo').get();
     for (var doc in invSnap.docs) {
       var d = doc.data();
       String sDoc = (d['sku'] ?? '').toString().trim();
       String eDoc = (d['ean'] ?? '').toString().trim();
+      String origDoc = (d['codigoOriginalCapturado'] ?? '').toString().trim();
 
-      if (sDoc == codigoViejo || (codigoViejo.isNotEmpty && eDoc == codigoViejo) || sDoc == skuFinal) {
+      if (sDoc == codigoViejo ||
+          (codigoViejo.isNotEmpty && eDoc == codigoViejo) ||
+          (codigoViejo.isNotEmpty && origDoc == codigoViejo) ||
+          sDoc == skuFinal) {
+        String codigoSemilla = origDoc.isNotEmpty ? origDoc : (codigoViejo.isNotEmpty ? codigoViejo : sDoc);
+        primeraUbicacion = (d['ubicacion'] ?? primeraUbicacion).toString();
+        totalPiezasAfectadas += ((d['cantidad'] ?? 0) as int);
+
         Map<String, dynamic> cambios = {
           'sku': skuFinal,
           'descripcion': descFinal,
+          'codigoOriginalCapturado': codigoSemilla,
+          'edicionTemporal': !esMatchOficialSAP,
+          'usuarioEdicionTemporal': usuarioActual ?? 'Colaborador',
+          'fechaEdicionTemporal': FieldValue.serverTimestamp(),
           'misionArticuloNuevo': FieldValue.delete(),
         };
         if (eanFinal.isNotEmpty) cambios['ean'] = eanFinal;
-        if (datosMaestros != null) {
+        if (esMatchOficialSAP) {
           cambios['idProveedor'] = fichaMaestra['idProveedor'];
           cambios['nombreProveedor'] = fichaMaestra['nombreProveedor'];
           cambios['idCategoria'] = fichaMaestra['idCategoria'];
           cambios['nombreGpoArticulos'] = fichaMaestra['nombreGpoArticulos'];
           cambios['precioVenta'] = fichaMaestra['precioVenta'];
           cambios['oh'] = fichaMaestra['oh'];
+        } else {
+          cambios['nombreProveedor'] = 'EDICIÓN TEMPORAL (PENDIENTE SAP)';
         }
         batch.update(doc.reference, cambios);
         lotesActualizados++;
@@ -127,28 +353,34 @@ class JerarquiaUbicacionHelper {
       }
     }
 
-    // 3. Actualizar todas las misiones en misiones_auditoria y autocompletar las de "VALIDAR ARTÍCULO NUEVO" de este código
     var misSnap = await refTienda.collection('misiones_auditoria').get();
     for (var mDoc in misSnap.docs) {
       var m = mDoc.data();
       String mSku = (m['sku'] ?? '').toString().trim();
       String mEan = (m['ean'] ?? '').toString().trim();
-      if (mSku == codigoViejo || (codigoViejo.isNotEmpty && mEan == codigoViejo) || mSku == skuFinal) {
+      String mOrig = (m['codigoOriginalCapturado'] ?? '').toString().trim();
+
+      if (mSku == codigoViejo ||
+          (codigoViejo.isNotEmpty && mEan == codigoViejo) ||
+          (codigoViejo.isNotEmpty && mOrig == codigoViejo) ||
+          mSku == skuFinal) {
         String msg = (m['mensaje'] ?? '').toString();
         bool esMisionArticuloNuevo = m['esArticuloNuevo'] == true || msg.contains('ARTÍCULO NUEVO');
 
         Map<String, dynamic> cambiosMision = {
           'sku': skuFinal,
           'descripcion': descFinal,
+          'codigoOriginalCapturado': mOrig.isNotEmpty ? mOrig : codigoViejo,
+          'edicionTemporal': !esMatchOficialSAP,
           if (eanFinal.isNotEmpty) 'ean': eanFinal,
-          if (datosMaestros != null) 'nombreProveedor': fichaMaestra['nombreProveedor'],
-          if (datosMaestros != null) 'nombreGpoArticulos': fichaMaestra['nombreGpoArticulos'],
+          'nombreProveedor': fichaMaestra['nombreProveedor'],
+          'nombreGpoArticulos': fichaMaestra['nombreGpoArticulos'],
         };
 
         if (esMisionArticuloNuevo && m['estado'] == 'pendiente') {
           cambiosMision['estado'] = 'completada';
-          cambiosMision['completadaPor'] = usuarioActual ?? 'Validado en Sistema';
-          cambiosMision['accionRealizada'] = 'validacion_sku';
+          cambiosMision['completadaPor'] = '${usuarioActual ?? 'Colaborador'} (${esMatchOficialSAP ? 'Match SAP' : 'Edición Temporal'})';
+          cambiosMision['accionRealizada'] = esMatchOficialSAP ? 'validacion_sap' : 'edicion_temporal';
         }
 
         batch.update(mDoc.reference, cambiosMision);
@@ -156,57 +388,26 @@ class JerarquiaUbicacionHelper {
       }
     }
 
-    // 4. Actualizar registros en historial_tratamientos
-    var histSnap = await refTienda.collection('historial_tratamientos').get();
-    for (var hDoc in histSnap.docs) {
-      var h = hDoc.data();
-      String hSku = (h['sku'] ?? '').toString().trim();
-      if (hSku == codigoViejo) {
-        batch.update(hDoc.reference, {
-          'sku': skuFinal,
-          'descripcion': descFinal,
-        });
-        await checkBatch();
-      }
-    }
+    batch.set(refTienda.collection('historial_tratamientos').doc(), {
+      'sku': skuFinal,
+      'ean': eanFinal,
+      'codigoOriginalCapturado': codigoViejo,
+      'descripcion': descFinal,
+      'nombreProveedor': fichaMaestra['nombreProveedor'],
+      'nombreGpoArticulos': fichaMaestra['nombreGpoArticulos'],
+      'ubicacion': lotesActualizados > 1 ? '$primeraUbicacion (+${lotesActualizados - 1} lotes)' : primeraUbicacion,
+      'cantidadTratada': totalPiezasAfectadas > 0 ? totalPiezasAfectadas : 1,
+      'motivo': esMatchOficialSAP
+          ? '✅ Validación con Match Oficial SAP (Orig: $codigoViejo)'
+          : '⏳ Edición Temporal en espera de SAP (Orig: $codigoViejo)',
+      'costoTotal': 0.0,
+      'fechaTratamiento': FieldValue.serverTimestamp(),
+      'usuario': usuarioActual ?? 'Colaborador',
+    });
+    await checkBatch();
 
     if (ops > 0) await batch.commit();
     return lotesActualizados;
-  }
-
-  static List<String> generarVariantesCodigo(String codigoRaw) {
-    String limpio = codigoRaw.trim();
-    if (limpio.isEmpty) return [];
-    String sinCeros = limpio.replaceFirst(RegExp(r'^0+'), '');
-    return <String>{
-      limpio,
-      if (sinCeros.isNotEmpty) sinCeros,
-      if (sinCeros.isNotEmpty) '0$sinCeros',
-      if (sinCeros.isNotEmpty) '00$sinCeros',
-    }.toList();
-  }
-
-  static Future<Map<String, dynamic>?> buscarProductoMaestro(String codigoRaw) async {
-    List<String> candidatos = generarVariantesCodigo(codigoRaw);
-    if (candidatos.isEmpty) return null;
-    var col = FirebaseFirestore.instance.collection('maestro_productos');
-
-    // 1. Buscar por ID directo de documento (EAN o SKU)
-    for (String cand in candidatos) {
-      var doc = await col.doc(cand).get();
-      if (doc.exists && doc.data() != null) return doc.data();
-    }
-    // 2. Respaldo por campo interno 'ean'
-    for (String cand in candidatos) {
-      var qEan = await col.where('ean', isEqualTo: cand).limit(1).get();
-      if (qEan.docs.isNotEmpty) return qEan.docs.first.data();
-    }
-    // 3. Respaldo por campo interno 'sku'
-    for (String cand in candidatos) {
-      var qSku = await col.where('sku', isEqualTo: cand).limit(1).get();
-      if (qSku.docs.isNotEmpty) return qSku.docs.first.data();
-    }
-    return null;
   }
 
   static List<String> descomponerRuta(String raw) {
@@ -384,7 +585,6 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
       Set<String> opcionesSet = {};
 
       if (nivelActual == 0) {
-        // Garantizar que siempre inicie con PISO, BODEGA, DISPLAY
         opcionesSet.addAll(['PISO', 'BODEGA', 'DISPLAY']);
       }
 
@@ -516,7 +716,6 @@ class _SelectorJerarquicoUbicacionState extends State<SelectorJerarquicoUbicacio
       );
 
       if (valorActual == null) break;
-      // Si el nivel actual ya no tiene sub-ramas en las rutas existentes, terminamos de desplegar
       bool tieneSubRamas = rutasDescompuestas.any((nr) {
         if (nr.length <= nivelActual + 1) return false;
         for (int i = 0; i <= nivelActual; i++) {

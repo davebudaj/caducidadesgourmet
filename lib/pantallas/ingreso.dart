@@ -138,8 +138,11 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
         batch.update(docExistente.reference, {'cantidad': cantActual + (item['cantidad'] as int)});
       } else {
         var ref = refTienda.collection('inventario_activo').doc();
+        bool esTemp = item['datosMaestros'] == null || item['datosMaestros']['esTemporal'] == true;
         Map<String, dynamic> data = {
           'sku': item['sku'],
+          'codigoOriginalCapturado': item['ean'] != null && item['ean'].toString().isNotEmpty ? item['ean'] : item['sku'],
+          if (esTemp && item['descripcion'] != 'ARTÍCULO NUEVO / NO EN CATÁLOGO') 'edicionTemporal': true,
           'ean': item['ean'] ?? '',
           'descripcion': item['descripcion'],
           'cantidad': item['cantidad'],

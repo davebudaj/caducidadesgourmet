@@ -1208,8 +1208,11 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
         int cantActual = loteIgual['cantidad'] ?? 0;
         await loteIgual.reference.update({'cantidad': cantActual + cantNueva});
       } else {
+        bool esTemp = _datosMaestros == null || _datosMaestros!['esTemporal'] == true;
         var map = <String, dynamic>{
           'sku': _skuOficial,
+          'codigoOriginalCapturado': widget.skuEscaneado.trim(),
+          if (esTemp && _descripcion != 'Artículo Nuevo') 'edicionTemporal': true,
           'descripcion': _descripcion,
           'ubicacion': _ubicacionSeleccionada,
           'cantidad': cantNueva,

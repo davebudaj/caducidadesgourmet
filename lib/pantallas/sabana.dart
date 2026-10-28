@@ -1107,6 +1107,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text('${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    if (d['edicionTemporal'] == true)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          '⏳ EDICIÓN TEMPORAL (Código orig: ${d['codigoOriginalCapturado'] ?? d['ean'] ?? d['sku']}) • En espera de alta oficial en SAP',
+                                          style: const TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
                                     if (d['enPromocion'] == true)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),

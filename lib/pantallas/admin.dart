@@ -1078,12 +1078,15 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) { debugPrint("Error descargando QR: $e"); }
   }
 
-  // Sincroniza inventario_activo y misiones_auditoria con un mapa en memoria recién cargado del CSV
+  // Sincroniza inventario_activo y misiones_auditoria cuando se sube un nuevo CSV del Catálogo Maestro Zonal
   Future<Map<String, int>> _sincronizarInventarioConMapaCatalogo(Map<String, Map<String, dynamic>> mapaCatalogo) async {
-    int lotesReparados = 0;
+    int lotesMissingReparados = 0;
+    int lotesTemporalesConciliados = 0;
     int lotesOhActualizado = 0;
+    int lotesTemporalesSinMatchConservados = 0;
 
     Map<String, dynamic>? buscarEnMapa(String codigo) {
+      if (codigo.trim().isEmpty) return null;
       for (String cand in JerarquiaUbicacionHelper.generarVariantesCodigo(codigo)) {
         if (mapaCatalogo.containsKey(cand)) return mapaCatalogo[cand];
       }
@@ -1107,22 +1110,23 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     var invSnap = await _refTienda.collection('inventario_activo').get();
     for (var doc in invSnap.docs) {
       var d = doc.data();
-      String skuActual = (d['sku'] ?? '').toString().trim();
+      String codigoOriginal = (d['codigoOriginalCapturado'] ?? '').toString().trim();
       String eanActual = (d['ean'] ?? '').toString().trim();
+      String skuActual = (d['sku'] ?? '').toString().trim();
       String descActual = (d['descripcion'] ?? '').toString().trim();
+      bool esTemporal = d['edicionTemporal'] == true;
+      bool eraMissing = descActual == 'Artículo Nuevo' ||
+          descActual == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' ||
+          descActual == 'Sin Nombre';
 
-      Map<String, dynamic>? infoMaestra = buscarEnMapa(skuActual);
-      if (infoMaestra == null && eanActual.isNotEmpty) {
-        infoMaestra = buscarEnMapa(eanActual);
-      }
+      // Prioridad 1: buscar por lo primero que se capturó (codigoOriginalCapturado), luego por EAN y luego por SKU
+      Map<String, dynamic>? infoMaestra = buscarEnMapa(codigoOriginal);
+      infoMaestra ??= buscarEnMapa(eanActual);
+      infoMaestra ??= buscarEnMapa(skuActual);
 
       if (infoMaestra != null) {
-        bool eraMissing = descActual == 'Artículo Nuevo' ||
-            descActual == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' ||
-            descActual == 'Sin Nombre' ||
-            (d['nombreProveedor'] ?? 'ND') == 'ND' ||
-            skuActual != infoMaestra['sku'];
-
+        // ¡Hizo Match con el Catálogo Oficial de Corporativo!
+        // Sobreescribe independientemente de si era "Artículo Nuevo" o si tenía Edición Temporal manual
         batch.update(doc.reference, {
           'sku': infoMaestra['sku'],
           'ean': infoMaestra['ean'],
@@ -1133,43 +1137,92 @@ class _PantallaAdminState extends State<PantallaAdmin> {
           'nombreGpoArticulos': infoMaestra['nombreGpoArticulos'],
           'precioVenta': infoMaestra['precioVenta'],
           'oh': infoMaestra['oh'],
+          'edicionTemporal': false,
+          'conciliadoConSAP': true,
+          'fechaConciliacionSAP': FieldValue.serverTimestamp(),
         });
         await commitSiNecesario();
 
-        if (eraMissing) {
-          lotesReparados++;
+        if (esTemporal || eraMissing) {
+          if (esTemporal) {
+            lotesTemporalesConciliados++;
+          } else {
+            lotesMissingReparados++;
+          }
+
+          // Guardar en el Historial de Tratamientos que el sistema concilió el lote con SAP
+          batch.set(_refTienda.collection('historial_tratamientos').doc(), {
+            'sku': infoMaestra['sku'],
+            'ean': infoMaestra['ean'],
+            'codigoOriginalCapturado': codigoOriginal.isNotEmpty ? codigoOriginal : skuActual,
+            'descripcion': infoMaestra['descripcion'],
+            'nombreProveedor': infoMaestra['nombreProveedor'],
+            'nombreGpoArticulos': infoMaestra['nombreGpoArticulos'],
+            'ubicacion': d['ubicacion'] ?? 'TIENDA',
+            'cantidadTratada': d['cantidad'] ?? 1,
+            'motivo': esTemporal
+                ? '🔄 Auto-Corrección Oficial SAP (Reemplazó edición temporal "$descActual" • Orig: ${codigoOriginal.isNotEmpty ? codigoOriginal : skuActual})'
+                : '✅ Auto-Match Oficial SAP (Antes: Artículo Nuevo • Orig: ${codigoOriginal.isNotEmpty ? codigoOriginal : skuActual})',
+            'costoTotal': 0.0,
+            'fechaTratamiento': FieldValue.serverTimestamp(),
+            'usuario': 'Sistema (Catálogo SAP)',
+          });
+          await commitSiNecesario();
         } else {
           lotesOhActualizado++;
+        }
+      } else {
+        // NO hubo match en esta actualización del Catálogo Maestro:
+        // Si ya tenía Edición Temporal, se deja tal cual lo corrigió el colaborador.
+        if (esTemporal) {
+          lotesTemporalesSinMatchConservados++;
         }
       }
     }
 
-    // 2. Revisar también misiones_auditoria pendientes para que no se queden con el código viejo o como "Artículo Nuevo"
-    var misSnap = await _refTienda.collection('misiones_auditoria').where('estado', isEqualTo: 'pendiente').get();
+    // 2. Actualizar misiones_auditoria si encontraron match oficial en SAP
+    var misSnap = await _refTienda.collection('misiones_auditoria').get();
     for (var mDoc in misSnap.docs) {
       var m = mDoc.data();
+      String mOrig = (m['codigoOriginalCapturado'] ?? '').toString().trim();
+      String mEan = (m['ean'] ?? '').toString().trim();
       String mSku = (m['sku'] ?? '').toString().trim();
-      Map<String, dynamic>? infoMaestra = buscarEnMapa(mSku);
+
+      Map<String, dynamic>? infoMaestra = buscarEnMapa(mOrig);
+      infoMaestra ??= buscarEnMapa(mEan);
+      infoMaestra ??= buscarEnMapa(mSku);
+
       if (infoMaestra != null) {
+        String msg = (m['mensaje'] ?? '').toString();
+        bool eraMisionArtNuevo = m['esArticuloNuevo'] == true || msg.contains('ARTÍCULO NUEVO');
         batch.update(mDoc.reference, {
           'sku': infoMaestra['sku'],
+          'ean': infoMaestra['ean'],
           'descripcion': infoMaestra['descripcion'],
           'nombreProveedor': infoMaestra['nombreProveedor'],
           'nombreGpoArticulos': infoMaestra['nombreGpoArticulos'],
+          'edicionTemporal': false,
+          if (eraMisionArtNuevo && m['estado'] == 'pendiente') 'estado': 'completada',
+          if (eraMisionArtNuevo && m['estado'] == 'pendiente') 'completadaPor': 'Auto-Match Catálogo SAP',
         });
         await commitSiNecesario();
       }
     }
 
     if (ops > 0) await batch.commit();
-    return {'reparados': lotesReparados, 'actualizados': lotesOhActualizado};
+    return {
+      'reparados': lotesMissingReparados,
+      'temporalesConciliados': lotesTemporalesConciliados,
+      'temporalesConservados': lotesTemporalesSinMatchConservados,
+      'actualizados': lotesOhActualizado,
+    };
   }
 
-  // Botón rápido para reparar "Artículo Nuevo" consultando directamente la colección maestro_productos actual
+  // Botón para buscar match en la BD actual tanto para "Artículo Nuevo" como para los que tienen "Edición Temporal"
   Future<void> _repararArticulosNuevosConBD() async {
     setState(() {
       _procesando = true;
-      _estado = 'Buscando match en la Base de Datos para los "Artículo Nuevo"...';
+      _estado = 'Verificando "Artículo Nuevo" y "Ediciones Temporales" contra la Base de Datos...';
     });
 
     try {
@@ -1179,8 +1232,9 @@ class _PantallaAdminState extends State<PantallaAdmin> {
       var db = FirebaseFirestore.instance;
       WriteBatch batch = db.batch();
       int ops = 0;
-      int reparados = 0;
-      int sinMatch = 0;
+      int reparadosOficial = 0;
+      int temporalesConservados = 0;
+      int sinMatchNuevos = 0;
 
       Future<void> commitSiNecesario() async {
         ops++;
@@ -1193,25 +1247,31 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
       for (var doc in invSnap.docs) {
         var d = doc.data();
+        String codigoOriginal = (d['codigoOriginalCapturado'] ?? '').toString().trim();
         String skuActual = (d['sku'] ?? '').toString().trim();
         String eanActual = (d['ean'] ?? '').toString().trim();
         String descActual = (d['descripcion'] ?? '').toString().trim();
         String provActual = (d['nombreProveedor'] ?? 'ND').toString().trim();
+        bool esTemporal = d['edicionTemporal'] == true;
 
-        bool necesitaMatch = descActual == 'Artículo Nuevo' ||
+        bool esMissing = descActual == 'Artículo Nuevo' ||
             descActual == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' ||
-            descActual == 'Sin Nombre' ||
-            provActual == 'ND' ||
-            skuActual.length >= 11; // Códigos UPC/EAN guardados como SKU
+            descActual == 'Sin Nombre';
 
-        if (!necesitaMatch) continue;
+        bool necesitaRevision = esMissing || esTemporal || provActual == 'ND' || skuActual.length >= 11;
+        if (!necesitaRevision) continue;
 
-        Map<String, dynamic>? master = await JerarquiaUbicacionHelper.buscarProductoMaestro(skuActual);
+        // Buscar únicamente contra registros OFICIALES de SAP (ignorando puentes temporales)
+        Map<String, dynamic>? master = await JerarquiaUbicacionHelper.buscarProductoMaestro(codigoOriginal, soloOficialSAP: true);
         if (master == null && eanActual.isNotEmpty) {
-          master = await JerarquiaUbicacionHelper.buscarProductoMaestro(eanActual);
+          master = await JerarquiaUbicacionHelper.buscarProductoMaestro(eanActual, soloOficialSAP: true);
+        }
+        if (master == null && skuActual.isNotEmpty) {
+          master = await JerarquiaUbicacionHelper.buscarProductoMaestro(skuActual, soloOficialSAP: true);
         }
 
         if (master != null && master['sku'] != null && master['sku'].toString().trim().isNotEmpty) {
+          // Encontró match oficial en SAP -> corrige y reemplaza la edición temporal o el Artículo Nuevo
           batch.update(doc.reference, {
             'sku': master['sku'].toString().trim(),
             'ean': (master['ean'] ?? eanActual).toString().trim(),
@@ -1222,48 +1282,57 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             'nombreGpoArticulos': master['nombreGpoArticulos'] ?? 'SIN GRUPO',
             'precioVenta': master['precioVenta'] ?? '0',
             'oh': master['oh'] ?? '0',
+            'edicionTemporal': false,
+            'conciliadoConSAP': true,
           });
           await commitSiNecesario();
-          reparados++;
-        } else {
-          sinMatch++;
-          bool yaTieneMision = misSnap.docs.any((m) =>
-              (m.data()['sku'] ?? '').toString().trim() == skuActual &&
-              (m.data()['esArticuloNuevo'] == true || (m.data()['mensaje'] ?? '').toString().contains('ARTÍCULO NUEVO')));
-          if (!yaTieneMision) {
-            batch.set(_refTienda.collection('misiones_auditoria').doc(), {
-              'sku': skuActual,
-              'ean': eanActual.isNotEmpty ? eanActual : skuActual,
-              'descripcion': 'Artículo Nuevo (Validar UPC / SKU en físico)',
-              'ubicacion': d['ubicacion'] ?? 'ND',
-              'cantidad': d['cantidad'] ?? 1,
-              'fechaCaducidad': d['fechaCaducidad'],
-              'nombreProveedor': 'SIN MATCH EN BD',
-              'nombreGpoArticulos': 'SIN GRUPO',
-              'estado': 'pendiente',
-              'esArticuloNuevo': true,
-              'fechaGeneracion': FieldValue.serverTimestamp(),
-              'mensaje': '🔎 ARTÍCULO NUEVO SIN MATCH: Ir a la ubicación, revisar físicamente el UPC / SKU del lote y editarlo para vincularlo.',
-            });
-            await commitSiNecesario();
-          }
-        }
-      }
 
-      for (var mDoc in misSnap.docs) {
-        var m = mDoc.data();
-        String mSku = (m['sku'] ?? '').toString().trim();
-        String mDesc = (m['descripcion'] ?? '').toString().trim();
-        if (mDesc == 'Artículo Nuevo' || mDesc == 'ARTÍCULO NUEVO / NO EN CATÁLOGO' || mSku.length >= 11) {
-          var master = await JerarquiaUbicacionHelper.buscarProductoMaestro(mSku);
-          if (master != null && master['sku'] != null) {
-            batch.update(mDoc.reference, {
-              'sku': master['sku'].toString().trim(),
-              'descripcion': master['descripcion'] ?? mDesc,
-              'nombreProveedor': master['nombreProveedor'] ?? 'ND',
-              'nombreGpoArticulos': master['nombreGpoArticulos'] ?? 'SIN GRUPO',
-            });
-            await commitSiNecesario();
+          batch.set(_refTienda.collection('historial_tratamientos').doc(), {
+            'sku': master['sku'].toString().trim(),
+            'ean': (master['ean'] ?? eanActual).toString().trim(),
+            'codigoOriginalCapturado': codigoOriginal.isNotEmpty ? codigoOriginal : skuActual,
+            'descripcion': master['descripcion'] ?? descActual,
+            'nombreProveedor': master['nombreProveedor'] ?? 'ND',
+            'nombreGpoArticulos': master['nombreGpoArticulos'] ?? 'SIN GRUPO',
+            'ubicacion': d['ubicacion'] ?? 'TIENDA',
+            'cantidadTratada': d['cantidad'] ?? 1,
+            'motivo': esTemporal
+                ? '🔄 Auto-Corrección Oficial SAP (Reemplazó edición temporal "$descActual" • Orig: ${codigoOriginal.isNotEmpty ? codigoOriginal : skuActual})'
+                : '✅ Auto-Match Oficial SAP (Antes: Artículo Nuevo • Orig: ${codigoOriginal.isNotEmpty ? codigoOriginal : skuActual})',
+            'costoTotal': 0.0,
+            'fechaTratamiento': FieldValue.serverTimestamp(),
+            'usuario': 'Sistema (Match BD)',
+          });
+          await commitSiNecesario();
+          reparadosOficial++;
+        } else {
+          // Sigue sin existir en el catálogo oficial de SAP:
+          if (esTemporal) {
+            // Ya fue editado temporalmente por un colaborador -> se conserva su edición intacta
+            temporalesConservados++;
+          } else {
+            sinMatchNuevos++;
+            bool yaTieneMision = misSnap.docs.any((m) =>
+                (m.data()['sku'] ?? '').toString().trim() == skuActual &&
+                (m.data()['esArticuloNuevo'] == true || (m.data()['mensaje'] ?? '').toString().contains('ARTÍCULO NUEVO')));
+            if (!yaTieneMision) {
+              batch.set(_refTienda.collection('misiones_auditoria').doc(), {
+                'sku': skuActual,
+                'codigoOriginalCapturado': codigoOriginal.isNotEmpty ? codigoOriginal : skuActual,
+                'ean': eanActual.isNotEmpty ? eanActual : skuActual,
+                'descripcion': 'Artículo Nuevo (Validar UPC / SKU en físico)',
+                'ubicacion': d['ubicacion'] ?? 'ND',
+                'cantidad': d['cantidad'] ?? 1,
+                'fechaCaducidad': d['fechaCaducidad'],
+                'nombreProveedor': 'SIN MATCH EN BD',
+                'nombreGpoArticulos': 'SIN GRUPO',
+                'estado': 'pendiente',
+                'esArticuloNuevo': true,
+                'fechaGeneracion': FieldValue.serverTimestamp(),
+                'mensaje': '🔎 ARTÍCULO NUEVO SIN MATCH: Ir a la ubicación, revisar físicamente el UPC / SKU del lote y editarlo temporalmente.',
+              });
+              await commitSiNecesario();
+            }
           }
         }
       }
@@ -1272,7 +1341,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
       setState(() {
         _procesando = false;
-        _estado = '✅ Match finalizado:\n$reparados lotes "Artículo Nuevo" actualizados con su SKU y Descripción real.\n($sinMatch lotes aún no existen en el Catálogo Maestro).';
+        _estado = '✅ Conciliación finalizada:\n• $reparadosOficial lotes actualizados con datos oficiales de SAP.\n• $temporalesConservados lotes con Edición Temporal conservados (aún sin alta en SAP).\n• $sinMatchNuevos lotes nuevos enviados a Misiones.';
       });
     } catch (e) {
       setState(() {
@@ -1357,7 +1426,8 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               'ean': ean, 
               'descripcion': desc,
               'precioVenta': precio, 
-              'oh': oh 
+              'oh': oh,
+              'esTemporal': false
             };
             
             if (ean.isNotEmpty && ean != "0" && ean != "NaN") { 
@@ -1395,7 +1465,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
         setState(() {
           _procesando = false;
-          _estado = "¡Catálogo Actualizado Exitosamente!\nSe mapearon $contadorSubidas SKUs.\n🔄 Match automático en Sábana: ${syncRes['reparados']} 'Artículo Nuevo' reparados y ${syncRes['actualizados']} lotes con OH actualizado.";
+          _estado = "¡Catálogo Actualizado Exitosamente! ($contadorSubidas SKUs)\n✅ ${syncRes['reparados']} 'Artículo Nuevo' vinculados • 🔄 ${syncRes['temporalesConciliados']} Ediciones Temporales corregidas por SAP • ⏳ ${syncRes['temporalesConservados']} temporales conservadas.";
         });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en Catálogo:\n$e"; }); }
