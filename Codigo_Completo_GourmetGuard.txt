@@ -1,29 +1,6 @@
 ====================================================================
 RESPALDO DE CÓDIGO FUENTE - GOURMET GUARD
-Generado: 30/10/2026 21:38:10
 ====================================================================
-
-### ESTRUCTURA DE CARPETAS Y ARCHIVOS ###
-📁 lib/
-  📄 firebase_options.dart
-  📄 main.dart
-  📁 modelos/
-    📄 etiqueta_mes.dart
-    📄 item_carrito.dart
-    📄 selector_jerarquico_ubicacion.dart
-  📁 pantallas/
-    📄 admin.dart
-    📄 corporativo.dart
-    📄 escaner.dart
-    📄 finanzas.dart
-    📄 historial.dart
-    📄 ingreso.dart
-    📄 login.dart
-    📄 misiones.dart
-    📄 navegacion.dart
-    📄 sabana.dart
-    📄 trasvase_pantallas.dart
-
 
 ====================================================================
 ARCHIVO: pubspec.yaml
@@ -355,6 +332,51 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class JerarquiaUbicacionHelper {
+  static final Map<String, String> _cacheUpcPorSku = {};
+  static bool _cargandoCacheUpc = false;
+  static bool _cacheUpcListo = false;
+  static final ValueNotifier<int> upcCacheVersion = ValueNotifier<int>(0);
+
+  static Future<void> precargarCacheUpc() async {
+    if (_cacheUpcListo || _cargandoCacheUpc) return;
+    _cargandoCacheUpc = true;
+    try {
+      var snap = await FirebaseFirestore.instance.collection('maestro_productos').get();
+      for (var doc in snap.docs) {
+        var d = doc.data();
+        String s = (d['sku'] ?? '').toString().trim();
+        String e = (d['ean'] ?? '').toString().trim();
+        if (s.isNotEmpty && e.isNotEmpty && e != '0' && e != 'NaN') {
+          _cacheUpcPorSku[s] = e;
+        }
+      }
+      _cacheUpcListo = true;
+      upcCacheVersion.value++;
+    } catch (_) {
+    } finally {
+      _cargandoCacheUpc = false;
+    }
+  }
+
+  static String obtenerUpcVisual(Map<String, dynamic>? d) {
+    if (!_cacheUpcListo && !_cargandoCacheUpc) {
+      precargarCacheUpc();
+    }
+    if (d == null) return 'ND';
+    String ean = (d['ean'] ?? '').toString().trim();
+    if (ean.isNotEmpty && ean != '0' && ean != 'NaN') return ean;
+
+    String sku = (d['sku'] ?? '').toString().trim();
+    if (sku.isNotEmpty && _cacheUpcPorSku.containsKey(sku)) {
+      return _cacheUpcPorSku[sku]!;
+    }
+
+    String orig = (d['codigoOriginalCapturado'] ?? '').toString().trim();
+    if (orig.length >= 8 && orig != sku) return orig;
+    if (sku.length >= 11) return sku;
+    return 'SIN UPC';
+  }
+
   // Normaliza texto quitando acentos, diéresis, signos y exceso de espacios
   static String normalizarTextoBusqueda(String input) {
     if (input.isEmpty) return '';
@@ -370,14 +392,14 @@ class JerarquiaUbicacionHelper {
     mapaAcentos.forEach((k, v) {
       s = s.replaceAll(k, v);
     });
-    s = s.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+    s = s.replaceAll(RegExp(r'[^a-z0-9\s<>]'), ' ');
     s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
     return s;
   }
 
   static bool coincideBusquedaInteligente(String consultaRaw, List<String?> camposDocumento) {
-    String q = normalizarTextoBusqueda(consultaRaw);
-    if (q.isEmpty) return true;
+    String q = normalizarTextoBusqueda(consultaRaw).replaceAll(RegExp(r'[<>]'), ' ');
+    if (q.trim().isEmpty) return true;
     List<String> palabras = q.split(' ').where((w) => w.isNotEmpty).toList();
     String acumulado = camposDocumento
         .map((c) => normalizarTextoBusqueda(c ?? ''))
@@ -388,7 +410,195 @@ class JerarquiaUbicacionHelper {
     return true;
   }
 
-  // Diccionario de expansión semántica (Traduce nombres comerciales/inglés a abreviaturas SAP)
+  // IA 1: PREDICTOR DE RIESGO DE NO VENTA (SOBRESTOCK VS DÍAS PARA VENCER)
+  static Map<String, dynamic>? analizarRiesgoSobrestockIA(Map<String, dynamic> d) {
+    Timestamp? ts = d['fechaCaducidad'];
+    if (ts == null) return null;
+    int dias = ts.toDate().difference(DateTime.now()).inDays;
+    int cant = (d['cantidad'] ?? 0) as int;
+
+    if (cant <= 1 || dias <= 0 || dias > 100) return null;
+
+    double ventaDiaria = double.tryParse((d['ventaDiariaPromedio'] ?? 0).toString()) ?? 0.0;
+    if (ventaDiaria > 0) {
+      double diasNecesarios = cant / ventaDiaria;
+      if (diasNecesarios > dias * 1.15) {
+        int sobrantes = (cant - (ventaDiaria * dias).floor()).clamp(1, cant);
+        return {
+          'enRiesgo': true,
+          'pzasEnRiesgo': sobrantes,
+          'detalle': '🧠 IA SOBRESTOCK: Al ritmo de venta (${ventaDiaria.toStringAsFixed(1)}/día), sobrarán ~$sobrantes pzas al vencer.',
+        };
+      }
+    }
+
+    // Heurística preventiva cuando un lote acumula demasiado volumen para su ventana de vida
+    bool volumenAlto = (dias <= 20 && cant >= 6) ||
+        (dias <= 35 && cant >= 10) ||
+        (dias <= 60 && cant >= 18) ||
+        (dias <= 90 && cant >= 30);
+
+    if (volumenAlto) {
+      double ventaSemanalRequerida = (cant / dias) * 7.0;
+      if (ventaSemanalRequerida >= 2.0) {
+        return {
+          'enRiesgo': true,
+          'pzasEnRiesgo': (cant * 0.5).round(),
+          'detalle': '🧠 IA SOBRESTOCK: $cant pzas para $dias días (Requiere vender ${ventaSemanalRequerida.toStringAsFixed(1)} pzas/sem). Priorizar exhibición.',
+        };
+      }
+    }
+    return null;
+  }
+
+  // IA 2: AUTO-RECOMENDADOR DE INSTRUCCIÓN CORPORATIVA
+  static Map<String, String> recomendarInstruccionCorporativaIA(Map<String, dynamic> d) {
+    Timestamp? ts = d['fechaCaducidad'];
+    int dias = ts != null ? ts.toDate().difference(DateTime.now()).inDays : 30;
+    int cant = (d['cantidad'] ?? 1) as int;
+    String gpo = (d['nombreGpoArticulos'] ?? '').toString().toUpperCase();
+    String desc = (d['descripcion'] ?? '').toString().toUpperCase();
+    String prov = (d['nombreProveedor'] ?? '').toString().toUpperCase();
+
+    if (desc.contains('ARTÍCULO NUEVO') || prov.contains('SIN MATCH')) {
+      return {
+        'comentario': 'SKU INEXISTENTE',
+        'razon': 'Lote sin match en catálogo SAP',
+      };
+    }
+    if (gpo.contains('VINO') || gpo.contains('LICOR') || desc.contains('VINO') || desc.contains('LICOR') || desc.contains('SAKE') || desc.contains('CERVEZA')) {
+      return {
+        'comentario': 'REVISAR CON EQUIPO COMERCIAL DE VINOS Y LICORES',
+        'razon': 'Categoría Vinos y Licores detectada',
+      };
+    }
+    if (dias < 0) {
+      return {
+        'comentario': 'MERMAR YA QUE NO SE COMPARTIÓ EN LAS FECHAS CORRECTAS',
+        'razon': 'Lote ya vencido ($dias días)',
+      };
+    }
+    if (dias <= 15) {
+      return {
+        'comentario': '15 DÍAS ANTES DE CADUCAR, PONER EL 50% DE DESCUENTO; SI NO SE VENDE, SE DA DE BAJA',
+        'razon': 'Ventana crítica ≤ 15 días ($dias d)',
+      };
+    }
+    if (dias <= 25 && cant >= 10) {
+      return {
+        'comentario': 'PRODUCTO DE TEMPORADA, APLICAR EL 50% DE DESCUENTO',
+        'razon': 'Volumen alto ($cant pzas) con $dias días restantes',
+      };
+    }
+    if (gpo.contains('DULCE') || gpo.contains('CONFITERIA') || gpo.contains('CHOCOLAT') || desc.contains('GOMITA') || desc.contains('POCKY') || desc.contains('GALLETA')) {
+      if (dias <= 30) {
+        return {
+          'comentario': 'GESTIONAR CAMBIO FÍSICO CON PROVEEDOR. EN CASO DE NO OBTENER RESPUESTA, DESTRUCCIÓN CON EVIDENCIA POR CORREO AL PROVEEDOR Y EQUIPO COMERCIAL',
+          'razon': 'Dulcería / Confitería en ventana de 30 días',
+        };
+      }
+      return {
+        'comentario': 'REVISAR CON EQUIPO COMERCIAL DE DULCERÍA',
+        'razon': 'Categoría Dulcería / Importados ($dias d)',
+      };
+    }
+    if (dias <= 35) {
+      return {
+        'comentario': 'REVISAR CON PROVEEDOR SI PROCEDE CAMBIO FÍSICO O DEVOLUCIÓN CON DESTRUCCIÓN',
+        'razon': 'Ventana preventiva de negociación ($dias d)',
+      };
+    }
+    return {
+      'comentario': 'PRODUCTO DE TEMPORADA, APLICAR EL 40% DE DESCUENTO',
+      'razon': 'Desplazamiento preventivo ($dias d • $cant pzas)',
+    };
+  }
+
+  // IA 4: BUSCADOR POR LENGUAJE NATURAL (Ej. "comercial toyo en bodega enero", "menos de 20 dias en piso")
+  static const Map<String, int> _mesesLenguajeNatural = {
+    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+    'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+    'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12,
+  };
+
+  static bool evaluarConsultaLenguajeNaturalIA(String consultaRaw, Map<String, dynamic> d) {
+    String q = normalizarTextoBusqueda(consultaRaw);
+    if (q.isEmpty) return true;
+
+    Timestamp? ts = d['fechaCaducidad'] ?? d['fechaGeneracion'];
+    DateTime? cad = ts?.toDate();
+    int dias = cad != null ? cad.difference(DateTime.now()).inDays : 999;
+
+    // 1. Detectar expresiones de límite máximo de días: "menos de 20 dias", "menor a 15 dias", "< 30 dias"
+    final regMenosDias = RegExp(r'(?:menos de|menor a|menores a|maximo|hasta|<|<=)\s*(\d+)\s*(?:dias|dia|d)?\b');
+    var matchMenos = regMenosDias.firstMatch(q);
+    if (matchMenos != null) {
+      int lim = int.tryParse(matchMenos.group(1)!) ?? 999;
+      if (dias > lim) return false;
+      q = q.replaceFirst(regMenosDias, ' ').trim();
+    }
+
+    // 2. Detectar expresiones de límite mínimo de días: "mas de 30 dias", "mayor a 45 dias", "> 60 dias"
+    final regMasDias = RegExp(r'(?:mas de|mayor a|mayores a|minimo|>|>=)\s*(\d+)\s*(?:dias|dia|d)?\b');
+    var matchMas = regMasDias.firstMatch(q);
+    if (matchMas != null) {
+      int lim = int.tryParse(matchMas.group(1)!) ?? 0;
+      if (dias < lim) return false;
+      q = q.replaceFirst(regMasDias, ' ').trim();
+    }
+
+    // 3. Palabras clave de estado operativo
+    List<String> tokens = q.replaceAll(RegExp(r'[<>]'), ' ').split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    List<String> tokensRestantes = [];
+
+    const stopwords = {
+      'en', 'de', 'del', 'con', 'que', 'vencen', 'vence', 'caducan', 'caduca',
+      'para', 'el', 'la', 'los', 'las', 'un', 'una', 'lotes', 'lote',
+      'productos', 'producto', 'articulos', 'dias', 'dia', 'mes', 'por'
+    };
+
+    for (String t in tokens) {
+      if (t == 'caducado' || t == 'caducados' || t == 'vencido' || t == 'vencidos') {
+        if (dias >= 0) return false;
+        continue;
+      }
+      if (t == 'critico' || t == 'criticos') {
+        if (dias < 0 || dias > 15) return false;
+        continue;
+      }
+      if (t == 'sobrestock') {
+        if (analizarRiesgoSobrestockIA(d) == null) return false;
+        continue;
+      }
+      if (t == 'promocion' || t == 'saldado') {
+        if (d['enPromocion'] != true) return false;
+        continue;
+      }
+      if (t == 'temporal' || t == 'temporales') {
+        if (d['edicionTemporal'] != true) return false;
+        continue;
+      }
+      if (_mesesLenguajeNatural.containsKey(t)) {
+        if (cad == null || cad.month != _mesesLenguajeNatural[t]) return false;
+        continue;
+      }
+      if (stopwords.contains(t)) continue;
+      tokensRestantes.add(t);
+    }
+
+    if (tokensRestantes.isEmpty) return true;
+
+    String upc = obtenerUpcVisual(d);
+    String acumulado = normalizarTextoBusqueda(
+      '${d['descripcion'] ?? ''} ${d['sku'] ?? ''} ${d['ean'] ?? ''} $upc ${d['nombreProveedor'] ?? ''} ${d['nombreGpoArticulos'] ?? ''} ${d['ubicacion'] ?? ''} ${d['mensaje'] ?? ''}',
+    );
+
+    for (String p in tokensRestantes) {
+      if (!acumulado.contains(p)) return false;
+    }
+    return true;
+  }
+
   static const Map<String, List<String>> _diccionarioSemanticoSAP = {
     'tea': ['te', 'beb', 'infusion'],
     'te': ['tea', 'beb', 'infusion'],
@@ -434,7 +644,6 @@ class JerarquiaUbicacionHelper {
     'korean': ['coreano', 'coreana', 'corea'],
   };
 
-  // Similitud de bigramas (Dice coefficient) para tolerar errores de dedo o abreviaturas
   static double _similitudBigramas(String a, String b) {
     if (a == b) return 1.0;
     if (a.length < 2 || b.length < 2) return 0.0;
@@ -450,7 +659,6 @@ class JerarquiaUbicacionHelper {
     return (2.0 * interseccion) / (bgA.length + bgB.length);
   }
 
-  // MOTOR IA SEMÁNTICO: Busca coincidencias en el catálogo SAP entendiendo abreviaturas, inglés, gramajes y errores ortográficos
   static List<Map<String, dynamic>> buscarSugerenciasSemanticasIA(
     String consultaComercial,
     Iterable<Map<String, dynamic>> catalogoCompleto,
@@ -465,7 +673,6 @@ class JerarquiaUbicacionHelper {
 
     if (tokensOriginales.isEmpty) return [];
 
-    // Extraer posibles números de gramaje (ej. "500ml" -> "500", "140g" -> "140")
     Set<String> numerosGramaje = {};
     for (var m in RegExp(r'\d{2,4}').allMatches(consultaComercial)) {
       numerosGramaje.add(m.group(0)!);
@@ -488,14 +695,12 @@ class JerarquiaUbicacionHelper {
       List<String> razones = [];
 
       for (String tokenQ in tokensOriginales) {
-        // 1. Coincidencia directa o prefijo en SAP
         if (tokensProd.any((tp) => tp == tokenQ || tp.startsWith(tokenQ) || tokenQ.startsWith(tp) && tp.length >= 3)) {
           puntos += 10.0;
           razones.add(tokenQ.toUpperCase());
           continue;
         }
 
-        // 2. Expansión por Diccionario Semántico IA (Inglés / Abreviaturas SAP)
         List<String> sinonimos = _diccionarioSemanticoSAP[tokenQ] ?? [];
         bool matchSinonimo = false;
         for (String sin in sinonimos) {
@@ -508,7 +713,6 @@ class JerarquiaUbicacionHelper {
         }
         if (matchSinonimo) continue;
 
-        // 3. Coincidencia difusa (errores de dedo o palabras recortadas en SAP)
         double mejorSim = 0.0;
         for (String tp in tokensProd) {
           double sim = _similitudBigramas(tokenQ, tp);
@@ -519,7 +723,6 @@ class JerarquiaUbicacionHelper {
         }
       }
 
-      // 4. Bono por coincidencia de gramaje/presentación (.500, .140, .105)
       for (String numG in numerosGramaje) {
         if (desc.contains('.$numG') || textoProdNorm.contains(numG)) {
           puntos += 4.5;
@@ -616,6 +819,10 @@ class JerarquiaUbicacionHelper {
     String eanFinal = (nuevoEan != null && nuevoEan.trim().isNotEmpty)
         ? nuevoEan.trim()
         : (datosMaestros?['ean']?.toString().trim() ?? (codigoViejo.length >= 11 && codigoViejo != skuFinal ? codigoViejo : ''));
+
+    if (skuFinal.isNotEmpty && eanFinal.isNotEmpty) {
+      _cacheUpcPorSku[skuFinal] = eanFinal;
+    }
 
     String descFinal = (esMatchOficialSAP && datosMaestros!['descripcion'] != null)
         ? datosMaestros['descripcion'].toString().trim()
@@ -2623,7 +2830,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             porDescontar -= descAqui;
 
             if (cantActual <= descAqui) await doc.reference.delete(); 
-            else await doc.reference.update({'cantidad': cantActual - descAqui});
+            else await doc.reference.update({'cantidad': cantActual - descAqui, 'ventaDiariaPromedio': ventasProcesadas[sku]});
 
             if (descAqui > 0) {
               var misionesP = await _refTienda.collection('misiones_auditoria')
@@ -2723,7 +2930,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                             side: const BorderSide(color: Colors.cyanAccent),
                           ),
                           icon: const Icon(Icons.auto_fix_high, size: 18),
-                          label: const Text('REPARAR "ARTÍCULO NUEVO" (HACER MATCH CON BD)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                          label: const Text('REPARAR "ARTÍCULO NUEVO"', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                           onPressed: _repararArticulosNuevosConBD,
                         ),
                       ),
@@ -2781,35 +2988,51 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
               
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Arquitectura de Ubicaciones (Árbol de Muebles)',
+                  style: TextStyle(fontSize: 16, color: Colors.amber, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Expanded(
-                    child: Text('Arquitectura de Ubicaciones (Árbol de Muebles)', style: TextStyle(fontSize: 16, color: Colors.amber, fontWeight: FontWeight.bold)),
-                  ),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueAccent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.print, size: 16),
+                      label: const Text('Imprimir QRs', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      onPressed: _abrirSelectorImpresionQRs,
                     ),
-                    icon: const Icon(Icons.print, size: 16),
-                    label: const Text('Imprimir QRs', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                    onPressed: _abrirSelectorImpresionQRs,
                   ),
-                  const SizedBox(width: 6),
-                  TextButton.icon(
-                    icon: Icon(_ramasContraidas.isEmpty ? Icons.unfold_less : Icons.unfold_more, color: Colors.cyanAccent, size: 16),
-                    label: Text(_ramasContraidas.isEmpty ? 'Contraer a 1er Nivel' : 'Expandir Todo', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                    onPressed: () {
-                      setState(() {
-                        if (_ramasContraidas.isNotEmpty) {
-                          _ramasContraidas.clear();
-                        } else {
-                          _ramasContraidas.addAll(_rutasConHijosActuales);
-                        }
-                      });
-                    },
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.cyanAccent,
+                        side: const BorderSide(color: Colors.cyanAccent),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                      icon: Icon(_ramasContraidas.isEmpty ? Icons.unfold_less : Icons.unfold_more, color: Colors.cyanAccent, size: 16),
+                      label: Text(
+                        _ramasContraidas.isEmpty ? 'Contraer a 1er Nivel' : 'Expandir Todo',
+                        style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          if (_ramasContraidas.isNotEmpty) {
+                            _ramasContraidas.clear();
+                          } else {
+                            _ramasContraidas.addAll(_rutasConHijosActuales);
+                          }
+                        });
+                      },
+                    ),
                   ),
                 ],
               ),
@@ -3103,12 +3326,18 @@ ARCHIVO: lib/pantallas/corporativo.dart
 ====================================================================
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../modelos/selector_jerarquico_ubicacion.dart';
 
 class PantallaCorporativo extends StatefulWidget {
   final String idTiendaGlobal;
   final String nombreUsuario;
   final String rolUsuario;
-  const PantallaCorporativo({super.key, required this.idTiendaGlobal, this.nombreUsuario = 'Administrador', this.rolUsuario = 'JEFE'});
+  const PantallaCorporativo({
+    super.key,
+    required this.idTiendaGlobal,
+    this.nombreUsuario = 'Administrador',
+    this.rolUsuario = 'JEFE',
+  });
   @override
   State<PantallaCorporativo> createState() => _PantallaCorporativoState();
 }
@@ -3141,6 +3370,12 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
     "MANDAR EVIDENCIA FOTOGRÁFICA"
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
+  }
+
   bool? _estadoCheck(List<QueryDocumentSnapshot> docs) {
     int count = docs.where((d) => _seleccionados.contains(d.id)).length;
     if (count == 0) return false;
@@ -3164,6 +3399,159 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
       _grupoExpandidos.clear();
       _collapseVersion++;
     });
+  }
+
+  // IA 2: MODAL AUTO-RECOMENDADOR DE INSTRUCCIONES CORPORATIVAS
+  void _abrirAutoRecomendadorIA(List<QueryDocumentSnapshot> docsEnRiesgo) {
+    List<QueryDocumentSnapshot> objetivos = _seleccionados.isNotEmpty
+        ? docsEnRiesgo.where((d) => _seleccionados.contains(d.id)).toList()
+        : docsEnRiesgo.where((d) => (d.data() as Map<String, dynamic>)['comentarioCorporativo'] == null).toList();
+
+    if (objetivos.isEmpty) {
+      objetivos = docsEnRiesgo;
+    }
+
+    Map<String, Map<String, String>> propuestasPorDocId = {};
+    for (var doc in objetivos) {
+      var d = doc.data() as Map<String, dynamic>;
+      propuestasPorDocId[doc.id] = JerarquiaUbicacionHelper.recomendarInstruccionCorporativaIA(d);
+    }
+
+    bool aplicando = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.pinkAccent, width: 2)),
+            title: const Row(
+              children: [
+                Icon(Icons.psychology, color: Colors.pinkAccent, size: 24),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '🧠 Auto-Recomendador IA Corporativo',
+                    style: TextStyle(color: Colors.pinkAccent, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 400,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'La IA analizó ${objetivos.length} lote(s) según su departamento, días restantes y cantidad:',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: objetivos.length,
+                      itemBuilder: (c, idx) {
+                        var doc = objetivos[idx];
+                        var d = doc.data() as Map<String, dynamic>;
+                        var prop = propuestasPorDocId[doc.id]!;
+                        return Card(
+                          color: Colors.white10,
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          child: ListTile(
+                            dense: true,
+                            title: Text(
+                              d['descripcion'] ?? d['sku'],
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'SKU: ${d['sku']} • UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}',
+                                  style: const TextStyle(fontSize: 10, color: Colors.cyanAccent),
+                                ),
+                                Text(
+                                  '🎯 Criterio IA: ${prop['razon']}',
+                                  style: const TextStyle(fontSize: 10, color: Colors.amberAccent, fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '🏢 Asignar: ${prop['comentario']}',
+                                  style: const TextStyle(fontSize: 11, color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: aplicando ? null : () => Navigator.pop(ctx),
+                child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.pinkAccent, foregroundColor: Colors.white),
+                icon: aplicando
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.auto_awesome, size: 18),
+                label: Text('APLICAR A ${objetivos.length} LOTE(S)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                onPressed: aplicando
+                    ? null
+                    : () async {
+                        setModalState(() => aplicando = true);
+                        var refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
+                        var batch = FirebaseFirestore.instance.batch();
+                        String etiquetaAutor = '${widget.rolUsuario.toUpperCase()} - ${widget.nombreUsuario.toUpperCase()} (IA)';
+
+                        Map<String, String> comentarioPorSku = {};
+                        for (var doc in objetivos) {
+                          var d = doc.data() as Map<String, dynamic>;
+                          String com = propuestasPorDocId[doc.id]!['comentario']!;
+                          if (d['sku'] != null) comentarioPorSku[d['sku'].toString()] = com;
+                          batch.update(refTienda.collection('inventario_activo').doc(doc.id), {
+                            'comentarioCorporativo': com,
+                            'autorComentarioCorp': etiquetaAutor,
+                          });
+                        }
+
+                        if (comentarioPorSku.isNotEmpty) {
+                          var misionesSnap = await refTienda.collection('misiones_auditoria').where('estado', isEqualTo: 'pendiente').get();
+                          for (var mDoc in misionesSnap.docs) {
+                            String mSku = (mDoc.data()['sku'] ?? '').toString();
+                            if (comentarioPorSku.containsKey(mSku)) {
+                              batch.update(mDoc.reference, {
+                                'comentarioCorporativo': comentarioPorSku[mSku],
+                                'autorComentarioCorp': etiquetaAutor,
+                              });
+                            }
+                          }
+                        }
+
+                        await batch.commit();
+                        if (mounted) {
+                          setState(() => _seleccionados.clear());
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('🧠 IA asignó instrucciones a ${objetivos.length} lotes y sincronizó con Misiones.'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   void _mostrarOpcionesComentarios(List<QueryDocumentSnapshot> docsFiltrados) {
@@ -3221,7 +3609,6 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
                             }
                           }
 
-                          // Conectar con Misiones de Auditoría activas para que los colaboradores vean la instrucción
                           if (skusSeleccionados.isNotEmpty) {
                             var misionesSnap = await refTienda.collection('misiones_auditoria').where('estado', isEqualTo: 'pendiente').get();
                             for (var mDoc in misionesSnap.docs) {
@@ -3258,163 +3645,189 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Acciones Corporativas', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        actions: [
-          if (_provExpandidos.isNotEmpty || _grupoExpandidos.isNotEmpty)
-            TextButton.icon(
-              onPressed: _contraerTodo,
-              icon: const Icon(Icons.unfold_less, color: Colors.amber, size: 18),
-              label: const Text('CONTRAER TODO', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
-            ),
-        ],
-      ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.pinkAccent));
-          if (!snapshot.hasData) return const Center(child: Text('Sin datos.'));
-
-          var docsFiltrados = snapshot.data!.docs.where((doc) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').snapshots(),
+      builder: (context, snapshot) {
+        var docsFiltrados = <QueryDocumentSnapshot>[];
+        if (snapshot.hasData) {
+          docsFiltrados = snapshot.data!.docs.where((doc) {
             var d = doc.data() as Map<String, dynamic>;
             if (d['fechaCaducidad'] == null) return false;
             DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
             int dias = cad.difference(DateTime.now()).inDays;
             return dias <= 45;
           }).toList();
+        }
 
-          if (docsFiltrados.isEmpty) {
-            return const Center(
-              child: Text('No hay mercancía en riesgo en este momento.', style: TextStyle(color: Colors.greenAccent, fontSize: 18)),
-            );
-          }
-
-          Map<String, Map<String, List<QueryDocumentSnapshot>>> agrupado = {};
-          for (var doc in docsFiltrados) {
-            var d = doc.data() as Map<String, dynamic>;
-            String prov = d['nombreProveedor'] ?? 'ND';
-            String grupo = d['nombreGpoArticulos'] ?? 'SIN GRUPO';
-            agrupado.putIfAbsent(prov, () => {});
-            agrupado[prov]!.putIfAbsent(grupo, () => []);
-            agrupado[prov]![grupo]!.add(doc);
-          }
-
-          var proveedoresOrdenados = agrupado.keys.toList()..sort();
-
-          return Stack(
-            children: [
-              Theme(
-                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                child: ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 85),
-                  itemCount: proveedoresOrdenados.length,
-                  itemBuilder: (context, i) {
-                    String prov = proveedoresOrdenados[i];
-                    var grupos = agrupado[prov]!;
-                    List<QueryDocumentSnapshot> docsProv = grupos.values.expand((x) => x).toList();
-                    bool? provState = _estadoCheck(docsProv);
-                    bool provAbierto = _provExpandidos.contains(prov);
-
-                    return Card(
-                      color: Colors.white10,
-                      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      child: ExpansionTile(
-                        key: PageStorageKey('prov_${_collapseVersion}_$prov'),
-                        initiallyExpanded: provAbierto,
-                        onExpansionChanged: (abierto) {
-                          setState(() {
-                            if (abierto) {
-                              _provExpandidos.add(prov);
-                            } else {
-                              _provExpandidos.remove(prov);
-                            }
-                          });
-                        },
-                        leading: Checkbox(
-                          tristate: true,
-                          value: provState,
-                          activeColor: Colors.pinkAccent,
-                          onChanged: (v) => _toggleDocs(docsProv, provState),
-                        ),
-                        title: Text(prov, style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 14)),
-                        subtitle: Text('${docsProv.length} lotes en riesgo', style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                        children: grupos.keys.toList().map((gpo) {
-                          List<QueryDocumentSnapshot> docsGpo = grupos[gpo]!;
-                          bool? gpoState = _estadoCheck(docsGpo);
-                          String gpoKey = '${prov}__$gpo';
-                          bool gpoAbierto = _grupoExpandidos.contains(gpoKey);
-
-                          return ExpansionTile(
-                            key: PageStorageKey('gpo_${_collapseVersion}_$gpoKey'),
-                            initiallyExpanded: gpoAbierto,
-                            onExpansionChanged: (abierto) {
-                              setState(() {
-                                if (abierto) {
-                                  _grupoExpandidos.add(gpoKey);
-                                } else {
-                                  _grupoExpandidos.remove(gpoKey);
-                                }
-                              });
-                            },
-                            leading: Checkbox(
-                              tristate: true,
-                              value: gpoState,
-                              activeColor: Colors.pinkAccent,
-                              onChanged: (v) => _toggleDocs(docsGpo, gpoState),
-                            ),
-                            title: Text(gpo, style: const TextStyle(color: Colors.blueAccent, fontSize: 13)),
-                            children: docsGpo.map((doc) {
-                              var d = doc.data() as Map<String, dynamic>;
-                              bool isSelected = _seleccionados.contains(doc.id);
-                              DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
-                              int dias = cad.difference(DateTime.now()).inDays;
-
-                              return ListTile(
-                                contentPadding: const EdgeInsets.only(left: 72, right: 16),
-                                leading: Checkbox(
-                                  value: isSelected,
-                                  activeColor: Colors.pinkAccent,
-                                  onChanged: (v) => _toggleDocs([doc], isSelected),
-                                ),
-                                title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontSize: 12)),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('${d['cantidad']} pzas • Vence en $dias días • ${d['ubicacion'] ?? 'ND'}', style: const TextStyle(fontSize: 10, color: Colors.amber)),
-                                    if (d['comentarioCorporativo'] != null)
-                                      Text(
-                                        '🏢 INSTRUCCIÓN (${d['autorComentarioCorp'] ?? 'CORPORATIVO'}): ${d['comentarioCorporativo']}',
-                                        style: const TextStyle(fontSize: 10, color: Colors.pinkAccent, fontWeight: FontWeight.bold),
-                                      ),
-                                    if (d['instruccionCorpEjecutada'] == true)
-                                      Text('✅ EJECUTADA POR: ${d['ejecutadaPorCorp'] ?? 'Piso'} (${d['motivoEjecucionCorp'] ?? 'OK'})', style: const TextStyle(fontSize: 10, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
-                          );
-                        }).toList(),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              if (_seleccionados.isNotEmpty)
-                Positioned(
-                  right: 16,
-                  bottom: 16,
-                  child: FloatingActionButton.extended(
-                    backgroundColor: Colors.pinkAccent,
-                    icon: const Icon(Icons.send, color: Colors.white),
-                    label: Text('APLICAR A ${_seleccionados.length}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    onPressed: () => _mostrarOpcionesComentarios(docsFiltrados),
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Acciones Corporativas', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            actions: [
+              if (docsFiltrados.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.pinkAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                    icon: const Icon(Icons.psychology, size: 16),
+                    label: const Text('AUTO-ASIGNAR IA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+                    onPressed: () => _abrirAutoRecomendadorIA(docsFiltrados),
                   ),
                 ),
+              if (_provExpandidos.isNotEmpty || _grupoExpandidos.isNotEmpty)
+                TextButton.icon(
+                  onPressed: _contraerTodo,
+                  icon: const Icon(Icons.unfold_less, color: Colors.amber, size: 18),
+                  label: const Text('CONTRAER', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 10)),
+                ),
             ],
-          );
-        },
-      ),
+          ),
+          body: !snapshot.hasData
+              ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+              : docsFiltrados.isEmpty
+                  ? const Center(
+                      child: Text('No hay mercancía en riesgo en este momento.', style: TextStyle(color: Colors.greenAccent, fontSize: 18)),
+                    )
+                  : Builder(
+                      builder: (context) {
+                        Map<String, Map<String, List<QueryDocumentSnapshot>>> agrupado = {};
+                        for (var doc in docsFiltrados) {
+                          var d = doc.data() as Map<String, dynamic>;
+                          String prov = d['nombreProveedor'] ?? 'ND';
+                          String grupo = d['nombreGpoArticulos'] ?? 'SIN GRUPO';
+                          agrupado.putIfAbsent(prov, () => {});
+                          agrupado[prov]!.putIfAbsent(grupo, () => []);
+                          agrupado[prov]![grupo]!.add(doc);
+                        }
+
+                        var proveedoresOrdenados = agrupado.keys.toList()..sort();
+
+                        return Stack(
+                          children: [
+                            Theme(
+                              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                              child: ListView.builder(
+                                padding: const EdgeInsets.only(bottom: 85),
+                                itemCount: proveedoresOrdenados.length,
+                                itemBuilder: (context, i) {
+                                  String prov = proveedoresOrdenados[i];
+                                  var grupos = agrupado[prov]!;
+                                  List<QueryDocumentSnapshot> docsProv = grupos.values.expand((x) => x).toList();
+                                  bool? provState = _estadoCheck(docsProv);
+                                  bool provAbierto = _provExpandidos.contains(prov);
+
+                                  return Card(
+                                    color: Colors.white10,
+                                    margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                    child: ExpansionTile(
+                                      key: PageStorageKey('prov_${_collapseVersion}_$prov'),
+                                      initiallyExpanded: provAbierto,
+                                      onExpansionChanged: (abierto) {
+                                        setState(() {
+                                          if (abierto) {
+                                            _provExpandidos.add(prov);
+                                          } else {
+                                            _provExpandidos.remove(prov);
+                                          }
+                                        });
+                                      },
+                                      leading: Checkbox(
+                                        tristate: true,
+                                        value: provState,
+                                        activeColor: Colors.pinkAccent,
+                                        onChanged: (v) => _toggleDocs(docsProv, provState),
+                                      ),
+                                      title: Text(prov, style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+                                      subtitle: Text('${docsProv.length} lotes en riesgo', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                      children: grupos.keys.toList().map((gpo) {
+                                        List<QueryDocumentSnapshot> docsGpo = grupos[gpo]!;
+                                        bool? gpoState = _estadoCheck(docsGpo);
+                                        String gpoKey = '${prov}__$gpo';
+                                        bool gpoAbierto = _grupoExpandidos.contains(gpoKey);
+
+                                        return ExpansionTile(
+                                          key: PageStorageKey('gpo_${_collapseVersion}_$gpoKey'),
+                                          initiallyExpanded: gpoAbierto,
+                                          onExpansionChanged: (abierto) {
+                                            setState(() {
+                                              if (abierto) {
+                                                _grupoExpandidos.add(gpoKey);
+                                              } else {
+                                                _grupoExpandidos.remove(gpoKey);
+                                              }
+                                            });
+                                          },
+                                          leading: Checkbox(
+                                            tristate: true,
+                                            value: gpoState,
+                                            activeColor: Colors.pinkAccent,
+                                            onChanged: (v) => _toggleDocs(docsGpo, gpoState),
+                                          ),
+                                          title: Text(gpo, style: const TextStyle(color: Colors.blueAccent, fontSize: 13)),
+                                          children: docsGpo.map((doc) {
+                                            var d = doc.data() as Map<String, dynamic>;
+                                            bool isSelected = _seleccionados.contains(doc.id);
+                                            DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+                                            int dias = cad.difference(DateTime.now()).inDays;
+                                            var sugerenciaIA = JerarquiaUbicacionHelper.recomendarInstruccionCorporativaIA(d);
+
+                                            return ListTile(
+                                              contentPadding: const EdgeInsets.only(left: 56, right: 16),
+                                              leading: Checkbox(
+                                                value: isSelected,
+                                                activeColor: Colors.pinkAccent,
+                                                onChanged: (v) => _toggleDocs([doc], isSelected),
+                                              ),
+                                              title: Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                              subtitle: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('SKU: ${d['sku'] ?? 'ND'}', style: const TextStyle(fontSize: 10, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                                  Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}', style: const TextStyle(fontSize: 10, color: Colors.cyanAccent, fontWeight: FontWeight.w600)),
+                                                  Text('${d['cantidad']} pzas • Vence en $dias días • ${d['ubicacion'] ?? 'ND'}', style: const TextStyle(fontSize: 10, color: Colors.amber)),
+                                                  if (d['comentarioCorporativo'] != null)
+                                                    Text(
+                                                      '🏢 INSTRUCCIÓN (${d['autorComentarioCorp'] ?? 'CORPORATIVO'}): ${d['comentarioCorporativo']}',
+                                                      style: const TextStyle(fontSize: 10, color: Colors.pinkAccent, fontWeight: FontWeight.bold),
+                                                    )
+                                                  else
+                                                    Text(
+                                                      '🧠 Sugerencia IA: ${sugerenciaIA['comentario']}',
+                                                      style: const TextStyle(fontSize: 10, color: Colors.white54, fontStyle: FontStyle.italic),
+                                                    ),
+                                                  if (d['instruccionCorpEjecutada'] == true)
+                                                    Text('✅ EJECUTADA POR: ${d['ejecutadaPorCorp'] ?? 'Piso'} (${d['motivoEjecucionCorp'] ?? 'OK'})', style: const TextStyle(fontSize: 10, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                                ],
+                                              ),
+                                            );
+                                          }).toList(),
+                                        );
+                                      }).toList(),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            if (_seleccionados.isNotEmpty)
+                              Positioned(
+                                right: 16,
+                                bottom: 16,
+                                child: FloatingActionButton.extended(
+                                  backgroundColor: Colors.pinkAccent,
+                                  icon: const Icon(Icons.send, color: Colors.white),
+                                  label: Text('APLICAR A ${_seleccionados.length}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                  onPressed: () => _mostrarOpcionesComentarios(docsFiltrados),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+        );
+      },
     );
   }
 }
@@ -3472,6 +3885,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   @override
   void initState() {
     super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
     try {
       String? camPref = html.window.localStorage['gg_camara_activa'];
       if (camPref != null) _camaraActiva = camPref == 'true';
@@ -3874,6 +4288,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                   const SizedBox(height: 4),
                   Text(descProducto, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
                   Text('SKU: $skuOficial', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                  Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(lotesDisponibles.first.data())}', style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.w600, fontSize: 11)),
                 ],
               ),
               content: SizedBox(
@@ -4637,6 +5052,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
         var map = <String, dynamic>{
           'sku': _skuOficial,
           'codigoOriginalCapturado': widget.skuEscaneado.trim(),
+          'ean': (_datosMaestros?['ean'] ?? (widget.skuEscaneado.trim().length >= 8 && widget.skuEscaneado.trim() != _skuOficial ? widget.skuEscaneado.trim() : '')).toString(),
           if (esTemp && _descripcion != 'Artículo Nuevo') 'edicionTemporal': true,
           'descripcion': _descripcion,
           'ubicacion': _ubicacionSeleccionada,
@@ -4734,7 +5150,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             TextField(
               controller: manualFechaCtrl,
               autofocus: true,
-              keyboardType: TextInputType.datetime,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.amberAccent),
               decoration: const InputDecoration(
                 labelText: 'Escribe la fecha de caducidad',
@@ -4770,20 +5186,32 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
       context: context,
       builder: (context) => Dialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.amber, width: 1.2)),
         child: Container(
-          height: 370,
-          padding: const EdgeInsets.all(16),
+          width: 420,
+          height: 495,
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 14),
           child: Column(
             children: [
               const Text('Fecha de Caducidad', style: TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               Expanded(
-                child: CalendarDatePicker(
-                  initialDate: tempDate,
-                  firstDate: DateTime(hoy.year, hoy.month, hoy.day),
-                  lastDate: DateTime(hoy.year + 10, hoy.month, hoy.day),
-                  onDateChanged: (DateTime newDate) => tempDate = newDate,
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    colorScheme: const ColorScheme.dark(
+                      primary: Colors.amber,
+                      onPrimary: Colors.black,
+                      surface: Color(0xFF1E1E1E),
+                      onSurface: Colors.white,
+                    ),
+                  ),
+                  child: CalendarDatePicker(
+                    initialDate: tempDate,
+                    firstDate: DateTime(hoy.year, hoy.month, hoy.day),
+                    lastDate: DateTime(hoy.year + 10, hoy.month, hoy.day),
+                    onDateChanged: (DateTime newDate) => tempDate = newDate,
+                  ),
                 ),
               ),
               Wrap(
@@ -4835,6 +5263,11 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             Text(_descripcion, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.amber), textAlign: TextAlign.center),
             const SizedBox(height: 8),
             Text('SKU Oficial: $_skuOficial', style: const TextStyle(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text(
+              'UPC: ${(_datosMaestros?['ean'] != null && _datosMaestros!['ean'].toString().trim().isNotEmpty) ? _datosMaestros!['ean'] : (widget.skuEscaneado.trim() != _skuOficial ? widget.skuEscaneado.trim() : JerarquiaUbicacionHelper.obtenerUpcVisual(_datosMaestros))}',
+              style: const TextStyle(fontSize: 13, color: Colors.cyanAccent, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 25),
             TextField(controller: _cantidadController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Cantidad de Piezas', filled: true)),
             const SizedBox(height: 20),
@@ -5653,12 +6086,16 @@ class PantallaHistorial extends StatefulWidget {
 }
 
 class _PantallaHistorialState extends State<PantallaHistorial> {
-  // Por defecto inicia siempre en el Año y Mes en curso
+  // Por defecto inicia en el Año y Mes en curso y limita a los últimos 3 meses para proteger la memoria
   int? _anioFiltro = DateTime.now().year;
   int? _mesFiltro = DateTime.now().month;
   int? _semanaFiltro; // 1..5
-  DateTimeRange? _rangoFechas; // Soporta tanto 1 solo día (start == end) como un rango de varios días
+  DateTimeRange? _rangoFechas;
   String? _grupoSeleccionado;
+  bool _filtrosOcultos = false;
+
+  static const int kLimiteRegistrosMemoria = 100;
+  static const int kDiasVentanaMaxima = 92; // ~3 meses
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -5666,12 +6103,18 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
   };
 
+  @override
+  void initState() {
+    super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
+  }
+
   int _calcularSemanaDelMes(DateTime fecha) {
     return ((fecha.day - 1) ~/ 7) + 1;
   }
 
   String _etiquetaRango() {
-    if (_rangoFechas == null) return 'Día o Rango de Fechas';
+    if (_rangoFechas == null) return 'Filtrar por Día o Rango de Fechas';
     DateTime s = _rangoFechas!.start;
     DateTime e = _rangoFechas!.end;
     if (s.year == e.year && s.month == e.month && s.day == e.day) {
@@ -5681,6 +6124,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   }
 
   void _abrirSelectorDiaORango() {
+    DateTime hoy = DateTime.now();
+    DateTime hace3Meses = hoy.subtract(const Duration(days: kDiasVentanaMaxima));
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E1E1E),
@@ -5691,7 +6136,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Filtrar por Fecha Exacta o Periodo', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
+              const Text('Filtrar por Fecha Exacta o Periodo (Últimos 3 Meses)', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14)),
               const SizedBox(height: 12),
               ListTile(
                 leading: const Icon(Icons.today, color: Colors.amberAccent),
@@ -5701,9 +6146,9 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                   Navigator.pop(ctx);
                   DateTime? picked = await showDatePicker(
                     context: context,
-                    initialDate: _rangoFechas?.start ?? DateTime.now(),
-                    firstDate: DateTime(2020),
-                    lastDate: DateTime(2030),
+                    initialDate: _rangoFechas?.start ?? hoy,
+                    firstDate: DateTime(hace3Meses.year, hace3Meses.month, 1),
+                    lastDate: DateTime(hoy.year + 1, 12, 31),
                   );
                   if (picked != null) {
                     setState(() {
@@ -5724,8 +6169,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                   DateTimeRange? pickedRange = await showDateRangePicker(
                     context: context,
                     initialDateRange: _rangoFechas,
-                    firstDate: DateTime(2020),
-                    lastDate: DateTime(2030),
+                    firstDate: DateTime(hace3Meses.year, hace3Meses.month, 1),
+                    lastDate: DateTime(hoy.year + 1, 12, 31),
                     helpText: 'SELECCIONA RANGO DE DÍAS',
                   );
                   if (pickedRange != null) {
@@ -5747,8 +6192,10 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
 
   @override
   Widget build(BuildContext context) {
-    int anioActual = DateTime.now().year;
-    List<int> aniosDisponibles = [anioActual, anioActual - 1, anioActual - 2];
+    DateTime hoy = DateTime.now();
+    DateTime fechaCorte3Meses = hoy.subtract(const Duration(days: kDiasVentanaMaxima));
+    int anioActual = hoy.year;
+    List<int> aniosDisponibles = {hoy.year, fechaCorte3Meses.year}.toList()..sort((a, b) => b.compareTo(a));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Historial de Tratamientos', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
@@ -5758,19 +6205,28 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
             .doc(widget.idTiendaGlobal)
             .collection('historial_tratamientos')
             .orderBy('fechaTratamiento', descending: true)
+            .limit(200)
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text('Aún no hay tratamientos registrados.'));
 
-          var grupos = snapshot.data!.docs
+          // Filtrar primero por ventana de 3 meses para no saturar la memoria RAM
+          var docsRecientes3Meses = snapshot.data!.docs.where((doc) {
+            var d = doc.data() as Map<String, dynamic>;
+            Timestamp? ts = d['fechaTratamiento'];
+            if (ts == null) return false;
+            return !ts.toDate().isBefore(fechaCorte3Meses);
+          }).toList();
+
+          var grupos = docsRecientes3Meses
               .map((doc) => (doc.data() as Map<String, dynamic>)['nombreGpoArticulos']?.toString() ?? 'SIN GRUPO')
               .toSet()
               .toList()
             ..sort();
 
-          var docsFiltrados = snapshot.data!.docs.where((doc) {
+          var docsFiltrados = docsRecientes3Meses.where((doc) {
             var d = doc.data() as Map<String, dynamic>;
             bool coincideGrupo = true;
             bool coincideFecha = true;
@@ -5796,160 +6252,254 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
             }
 
             return coincideGrupo && coincideFecha;
-          }).toList();
+          }).take(kLimiteRegistrosMemoria).toList();
 
           return Column(
             children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                color: Colors.black,
-                child: Column(
-                  children: [
-                    Row(
+              if (_filtrosOcultos)
+                InkWell(
+                  onTap: () => setState(() => _filtrosOcultos = false),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      border: Border(bottom: BorderSide(color: Colors.amber.withOpacity(0.6), width: 1.5)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Expanded(
-                          flex: 2,
-                          child: Container(
-                            height: 38,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<int?>(
-                                isExpanded: true,
-                                dropdownColor: const Color(0xFF2C2C2C),
-                                value: _anioFiltro,
-                                items: [
-                                  const DropdownMenuItem(value: null, child: Text('Año: Todos', style: TextStyle(fontSize: 11, color: Colors.greenAccent))),
-                                  ...aniosDisponibles.map((a) => DropdownMenuItem(value: a, child: Text('Año $a', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)))),
-                                ],
-                                onChanged: (v) => setState(() {
-                                  _anioFiltro = v;
-                                  _rangoFechas = null;
-                                }),
-                              ),
-                            ),
-                          ),
-                        ),
+                        const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber, size: 20),
                         const SizedBox(width: 6),
-                        Expanded(
-                          flex: 3,
-                          child: Container(
-                            height: 38,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<int?>(
-                                isExpanded: true,
-                                dropdownColor: const Color(0xFF2C2C2C),
-                                value: _mesFiltro,
-                                items: [
-                                  const DropdownMenuItem(value: null, child: Text('Mes: Todo el año', style: TextStyle(fontSize: 11, color: Colors.greenAccent))),
-                                  ..._nombresMeses.entries.map((e) => DropdownMenuItem(value: e.key, child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)))),
-                                ],
-                                onChanged: (v) => setState(() {
-                                  _mesFiltro = v;
-                                  if (v == null) _semanaFiltro = null;
-                                  _rangoFechas = null;
-                                }),
-                              ),
-                            ),
-                          ),
+                        Text(
+                          'Bajar Filtros de Historial (${docsFiltrados.length} registros • Máx 3 meses)',
+                          style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
                         ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          flex: 3,
-                          child: Container(
-                            height: 38,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<int?>(
-                                isExpanded: true,
-                                dropdownColor: const Color(0xFF2C2C2C),
-                                value: _semanaFiltro,
-                                items: const [
-                                  DropdownMenuItem(value: null, child: Text('Semana: Todas', style: TextStyle(fontSize: 11, color: Colors.greenAccent))),
-                                  DropdownMenuItem(value: 1, child: Text('Sem 1 (Días 1-7)', style: TextStyle(fontSize: 11))),
-                                  DropdownMenuItem(value: 2, child: Text('Sem 2 (Días 8-14)', style: TextStyle(fontSize: 11))),
-                                  DropdownMenuItem(value: 3, child: Text('Sem 3 (Días 15-21)', style: TextStyle(fontSize: 11))),
-                                  DropdownMenuItem(value: 4, child: Text('Sem 4 (Días 22-28)', style: TextStyle(fontSize: 11))),
-                                  DropdownMenuItem(value: 5, child: Text('Sem 5 (Días 29-31)', style: TextStyle(fontSize: 11))),
-                                ],
-                                onChanged: (v) => setState(() {
-                                  _semanaFiltro = v;
-                                  _rangoFechas = null;
-                                }),
-                              ),
-                            ),
-                          ),
-                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.tune, color: Colors.amberAccent, size: 15),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 4,
-                          child: SizedBox(
-                            height: 38,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _rangoFechas != null ? Colors.amber : Colors.white10,
-                                foregroundColor: _rangoFechas != null ? Colors.black : Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  decoration: const BoxDecoration(
+                    color: Colors.black,
+                    border: Border(bottom: BorderSide(color: Colors.white24, width: 1)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            '⚡ Ventana activa: Últimos 3 meses (Máx. 100 registros)',
+                            style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                          if (_rangoFechas != null || _semanaFiltro != null || _grupoSeleccionado != null || _mesFiltro != hoy.month || _anioFiltro != anioActual)
+                            TextButton.icon(
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
-                              icon: const Icon(Icons.date_range, size: 15),
-                              label: Text(
-                                _etiquetaRango(),
-                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              onPressed: _abrirSelectorDiaORango,
+                              icon: const Icon(Icons.refresh, color: Colors.amberAccent, size: 15),
+                              label: const Text('Restaurar Mes Actual', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                              onPressed: () => setState(() {
+                                _rangoFechas = null;
+                                _semanaFiltro = null;
+                                _grupoSeleccionado = null;
+                                _anioFiltro = hoy.year;
+                                _mesFiltro = hoy.month;
+                              }),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4, bottom: 3),
+                                  child: Text('Filtro Año', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                ),
+                                Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<int?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: aniosDisponibles.contains(_anioFiltro) ? _anioFiltro : null,
+                                      items: [
+                                        const DropdownMenuItem(value: null, child: Text('Año: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                        ...aniosDisponibles.map((a) => DropdownMenuItem(value: a, child: Text('📅 Año $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                      ],
+                                      onChanged: (v) => setState(() {
+                                        _anioFiltro = v;
+                                        _rangoFechas = null;
+                                      }),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
-                        if (_rangoFechas != null || _semanaFiltro != null || _grupoSeleccionado != null || _mesFiltro != DateTime.now().month)
-                          IconButton(
-                            icon: const Icon(Icons.refresh, color: Colors.amberAccent, size: 18),
-                            tooltip: 'Volver al mes en curso',
-                            onPressed: () => setState(() {
-                              _rangoFechas = null;
-                              _semanaFiltro = null;
-                              _grupoSeleccionado = null;
-                              _anioFiltro = DateTime.now().year;
-                              _mesFiltro = DateTime.now().month;
-                            }),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4, bottom: 3),
+                                  child: Text('Filtro Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                ),
+                                Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<int?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: _mesFiltro,
+                                      items: [
+                                        const DropdownMenuItem(value: null, child: Text('Mes: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                        ..._nombresMeses.entries.map((e) => DropdownMenuItem(value: e.key, child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                      ],
+                                      onChanged: (v) => setState(() {
+                                        _mesFiltro = v;
+                                        if (v == null) _semanaFiltro = null;
+                                        _rangoFechas = null;
+                                      }),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          flex: 4,
-                          child: Container(
-                            height: 38,
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String?>(
-                                isExpanded: true,
-                                dropdownColor: const Color(0xFF2C2C2C),
-                                value: _grupoSeleccionado,
-                                hint: const Text('Grupo Art.', style: TextStyle(fontSize: 11, color: Colors.white54)),
-                                items: [
-                                  const DropdownMenuItem(value: null, child: Text('Grupo: Todos', style: TextStyle(fontSize: 11, color: Colors.greenAccent))),
-                                  ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)))
-                                ],
-                                onChanged: (v) => setState(() => _grupoSeleccionado = v),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4, bottom: 3),
+                                  child: Text('Filtro Semana del Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                ),
+                                Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<int?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: _semanaFiltro,
+                                      items: const [
+                                        DropdownMenuItem(value: null, child: Text('Semana: Todas las del mes', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                        DropdownMenuItem(value: 1, child: Text('Semana 1 (Días 1 al 7)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 2, child: Text('Semana 2 (Días 8 al 14)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 3, child: Text('Semana 3 (Días 15 al 21)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 4, child: Text('Semana 4 (Días 22 al 28)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 5, child: Text('Semana 5 (Días 29 al 31)', style: TextStyle(fontSize: 12))),
+                                      ],
+                                      onChanged: (v) => setState(() {
+                                        _semanaFiltro = v;
+                                        _rangoFechas = null;
+                                      }),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 40,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _rangoFechas != null ? Colors.amber : Colors.white10,
+                                  foregroundColor: _rangoFechas != null ? Colors.black : Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                                icon: const Icon(Icons.date_range, size: 16),
+                                label: Text(
+                                  _etiquetaRango(),
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                onPressed: _abrirSelectorDiaORango,
                               ),
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Container(
+                              height: 40,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String?>(
+                                  isExpanded: true,
+                                  dropdownColor: const Color(0xFF2C2C2C),
+                                  value: grupos.contains(_grupoSeleccionado) ? _grupoSeleccionado : null,
+                                  hint: const Text('Grupo Art.', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                  items: [
+                                    const DropdownMenuItem(value: null, child: Text('Grupo: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                    ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
+                                  ],
+                                  onChanged: (v) => setState(() => _grupoSeleccionado = v),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: () => setState(() => _filtrosOcultos = true),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                              SizedBox(width: 4),
+                              Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
                         ),
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
               Expanded(
                 child: docsFiltrados.isEmpty
-                    ? const Center(child: Text('No hay tratamientos registrados en este periodo.', style: TextStyle(color: Colors.white54)))
+                    ? const Center(child: Text('No hay tratamientos registrados en este periodo (Últimos 3 meses).', style: TextStyle(color: Colors.white54)))
                     : ListView.builder(
                         itemCount: docsFiltrados.length,
                         itemBuilder: (context, index) {
@@ -5972,8 +6522,9 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text('SKU: ${d['sku'] ?? 'ND'} • Grupo: $grupo', style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                                     Text('Prov: $proveedor', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                    Text('Ubicación: $ubicacion', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11)),
+                                    Text('Ubicación: $ubicacion', style: const TextStyle(color: Colors.white70, fontSize: 11)),
                                     const SizedBox(height: 2),
                                     Text('Retirado: ${d['cantidadTratada']} pzas • ${d['motivo']}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                                     Text('Usuario: ${d['usuario']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
@@ -6197,7 +6748,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                     child: TextField(
                       controller: _fechaCtrl,
                       decoration: const InputDecoration(labelText: 'Fecha de Caducidad', hintText: 'Ej. 01.09.26 o 01/09/2026', filled: true, fillColor: Colors.black45, border: OutlineInputBorder()),
-                      keyboardType: TextInputType.datetime,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -6239,7 +6790,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                     child: ListTile(
                       leading: CircleAvatar(backgroundColor: Colors.amber, child: Text(item['cantidad'].toString(), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold))),
                       title: Text(item['descripcion'], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      subtitle: Text('SKU: ${item['sku']} • Vence: ${item['fechaRaw']}\nProv: ${item['nombreProveedor']}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                      subtitle: Text('SKU: ${item['sku']} • Vence: ${item['fechaRaw']}\nUPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(item)} • Prov: ${item['nombreProveedor']}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
                       trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: () => setState(() => _manifiesto.removeAt(i))),
                     ),
                   );
@@ -6591,12 +7142,37 @@ class PantallaMisiones extends StatefulWidget {
 }
 
 class _PantallaMisionesState extends State<PantallaMisiones> {
+  final TextEditingController _busquedaMisionCtrl = TextEditingController();
+  String _busquedaMision = '';
   bool _actualizando = false;
   bool _verHistorial = false;
+  bool _filtrosOcultosMisiones = false;
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
   int? _filtroTipoMision;
+  int? _anioFiltroHistMision = DateTime.now().year;
+  int? _mesFiltroHistMision = DateTime.now().month;
+  int? _semanaFiltroHistMision;
+
   static const String kUbicacionTransito = 'EN TRÁNSITO';
+  static const int kLimiteHistorialMisiones = 100;
+  static const int kDiasVentanaHistorialMisiones = 92; // 3 meses
+
+  static const Map<int, String> _nombresMesesMision = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
+  }
+
+  int _calcularSemanaMision(DateTime fecha) {
+    return ((fecha.day - 1) ~/ 7) + 1;
+  }
 
   CollectionReference<Map<String, dynamic>> get _refInv =>
       FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo');
@@ -7202,7 +7778,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 child: Text('🧠 ${item['scoreIA'] ?? 90}%', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
                               ),
                               title: Text(item['descripcion'] ?? '', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
-                              subtitle: Text('SKU: ${item['sku']} • ${item['nombreProveedor'] ?? 'ND'}\nCoincidencia: ${item['razonIA'] ?? 'Semántica'}', style: const TextStyle(fontSize: 10, color: Colors.amberAccent)),
+                              subtitle: Text('SKU: ${item['sku']} • UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(item)}\nProv: ${item['nombreProveedor'] ?? 'ND'} (${item['razonIA'] ?? 'Semántica'})', style: const TextStyle(fontSize: 10, color: Colors.amberAccent)),
                               onTap: () {
                                 setModalState(() {
                                   datosMaestrosEncontrados = item;
@@ -7454,6 +8030,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               Text(m['descripcion'] ?? sku, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 13)),
               const SizedBox(height: 2),
               Text('SKU: $sku', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+              Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(m)}', style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.w600, fontSize: 11)),
               const SizedBox(height: 6),
               Text(
                 'Pendiente por validar: $pendientes pza(s) vendida(s) en SAP.',
@@ -7805,7 +8382,21 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
 
                   String estadoBuscado = _verHistorial ? 'completada' : 'pendiente';
-                  var baseDocs = snapshot.data!.docs.where((doc) => (doc.data() as Map<String, dynamic>)['estado'] == estadoBuscado).toList();
+                  DateTime hoy = DateTime.now();
+                  DateTime corte3Meses = hoy.subtract(const Duration(days: kDiasVentanaHistorialMisiones));
+                  List<int> aniosHistDisponibles = {hoy.year, corte3Meses.year}.toList()..sort((a, b) => b.compareTo(a));
+
+                  var baseDocs = snapshot.data!.docs.where((doc) {
+                    var d = doc.data() as Map<String, dynamic>;
+                    if (d['estado'] != estadoBuscado) return false;
+                    if (_verHistorial) {
+                      Timestamp? ts = d['fechaGeneracion'] ?? d['fechaCaducidad'];
+                      if (ts != null && ts.toDate().isBefore(corte3Meses)) {
+                        return false;
+                      }
+                    }
+                    return true;
+                  }).toList();
 
                   var provsDisponibles = baseDocs
                       .map((d) => ((d.data() as Map<String, dynamic>)['nombreProveedor'] ?? 'ND').toString())
@@ -7813,13 +8404,16 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       .toList()
                     ..sort();
 
-                  var mueblesDisponibles = baseDocs
-                      .map((d) => ((d.data() as Map<String, dynamic>)['ubicacion'] ?? 'ND').toString())
-                      .toSet()
-                      .toList()
-                    ..sort();
+                  Map<String, int> conteoPorUbicacionMision = {};
+                  for (var doc in baseDocs) {
+                    String u = ((doc.data() as Map<String, dynamic>)['ubicacion'] ?? 'ND').toString().trim();
+                    if (u.isNotEmpty) {
+                      conteoPorUbicacionMision[u] = (conteoPorUbicacionMision[u] ?? 0) + 1;
+                    }
+                  }
+                  var mueblesDisponibles = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(conteoPorUbicacionMision.keys);
 
-                  var lista = baseDocs.where((doc) {
+                  var listaFiltrada = baseDocs.where((doc) {
                     var d = doc.data() as Map<String, dynamic>;
                     String p = (d['nombreProveedor'] ?? 'ND').toString();
                     String u = (d['ubicacion'] ?? 'ND').toString();
@@ -7830,10 +8424,23 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                     bool okMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(u, prefMueble);
                     int tipoPrio = _getPriority(d);
                     bool okTipo = _filtroTipoMision == null || tipoPrio == _filtroTipoMision;
-                    return okProv && okMueble && okTipo;
+
+                    bool okFechaHist = true;
+                    if (_verHistorial) {
+                      Timestamp? ts = d['fechaGeneracion'] ?? d['fechaCaducidad'];
+                      if (ts != null) {
+                        DateTime dt = ts.toDate();
+                        if (_anioFiltroHistMision != null && dt.year != _anioFiltroHistMision) okFechaHist = false;
+                        if (_mesFiltroHistMision != null && dt.month != _mesFiltroHistMision) okFechaHist = false;
+                        if (_semanaFiltroHistMision != null && _calcularSemanaMision(dt) != _semanaFiltroHistMision) okFechaHist = false;
+                      }
+                    }
+
+                    bool okBusqueda = _busquedaMision.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busquedaMision, d);
+                    return okProv && okMueble && okTipo && okFechaHist && okBusqueda;
                   }).toList();
 
-                  lista.sort((a, b) {
+                  listaFiltrada.sort((a, b) {
                     var dA = a.data() as Map<String, dynamic>;
                     var dB = b.data() as Map<String, dynamic>;
                     if (!_verHistorial) {
@@ -7846,84 +8453,317 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                     return tB.compareTo(tA);
                   });
 
+                  var lista = _verHistorial
+                      ? listaFiltrada.take(kLimiteHistorialMisiones).toList()
+                      : listaFiltrada;
+
+                  bool hayFiltrosActivos = _busquedaMision.isNotEmpty || _filtroProveedorMision != null ||
+                      _filtroMuebleMision != null ||
+                      _filtroTipoMision != null ||
+                      (_verHistorial && (_anioFiltroHistMision != hoy.year || _mesFiltroHistMision != hoy.month || _semanaFiltroHistMision != null));
+
                   return Column(
                     children: [
-                      Container(
-                        color: Colors.black,
-                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Container(
-                                height: 44,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: _filtroTipoMision != null ? Colors.amber : Colors.white12)),
+                      if (_filtrosOcultosMisiones)
+                        InkWell(
+                          onTap: () => setState(() => _filtrosOcultosMisiones = false),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.black,
+                              border: Border(bottom: BorderSide(color: Colors.amber.withOpacity(0.6), width: 1.5)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber, size: 20),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Bajar Filtros (${lista.length} ${_verHistorial ? "en historial" : "misiones"})',
+                                  style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.tune, color: Colors.amberAccent, size: 15),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        Container(
+                          color: Colors.black,
+                          padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (_verHistorial) ...[
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      '⚡ Historial limitado a 3 meses (Máx. 100 misiones)',
+                                      style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                    ),
+                                    if (hayFiltrosActivos)
+                                      TextButton.icon(
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                        icon: const Icon(Icons.refresh, color: Colors.amberAccent, size: 14),
+                                        label: const Text('Restaurar Mes', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                        onPressed: () => setState(() {
+                                          _filtroProveedorMision = null;
+                                          _filtroMuebleMision = null;
+                                          _filtroTipoMision = null;
+                                          _anioFiltroHistMision = hoy.year;
+                                          _mesFiltroHistMision = hoy.month;
+                                          _semanaFiltroHistMision = null;
+                                        }),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Padding(
+                                            padding: EdgeInsets.only(left: 4, bottom: 3),
+                                            child: Text('Filtro Año', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                          ),
+                                          Container(
+                                            height: 40,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                            child: DropdownButtonHideUnderline(
+                                              child: DropdownButton<int?>(
+                                                isExpanded: true,
+                                                dropdownColor: const Color(0xFF2C2C2C),
+                                                value: aniosHistDisponibles.contains(_anioFiltroHistMision) ? _anioFiltroHistMision : null,
+                                                items: [
+                                                  const DropdownMenuItem(value: null, child: Text('Año: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                                  ...aniosHistDisponibles.map((a) => DropdownMenuItem(value: a, child: Text('📅 Año $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                                ],
+                                                onChanged: (v) => setState(() => _anioFiltroHistMision = v),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Padding(
+                                            padding: EdgeInsets.only(left: 4, bottom: 3),
+                                            child: Text('Filtro Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                          ),
+                                          Container(
+                                            height: 40,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                            child: DropdownButtonHideUnderline(
+                                              child: DropdownButton<int?>(
+                                                isExpanded: true,
+                                                dropdownColor: const Color(0xFF2C2C2C),
+                                                value: _mesFiltroHistMision,
+                                                items: [
+                                                  const DropdownMenuItem(value: null, child: Text('Mes: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                                  ..._nombresMesesMision.entries.map((e) => DropdownMenuItem(value: e.key, child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                                ],
+                                                onChanged: (v) => setState(() {
+                                                  _mesFiltroHistMision = v;
+                                                  if (v == null) _semanaFiltroHistMision = null;
+                                                }),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4, bottom: 3),
+                                  child: Text('Filtro Semana del Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                ),
+                                Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<int?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: _semanaFiltroHistMision,
+                                      items: const [
+                                        DropdownMenuItem(value: null, child: Text('Semana: Todas las semanas del mes', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                        DropdownMenuItem(value: 1, child: Text('Semana 1 (Días 1 al 7)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 2, child: Text('Semana 2 (Días 8 al 14)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 3, child: Text('Semana 3 (Días 15 al 21)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 4, child: Text('Semana 4 (Días 22 al 28)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 5, child: Text('Semana 5 (Días 29 al 31)', style: TextStyle(fontSize: 12))),
+                                      ],
+                                      onChanged: (v) => setState(() => _semanaFiltroHistMision = v),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                              ],
+                              TextField(
+                                controller: _busquedaMisionCtrl,
+                                decoration: InputDecoration(
+                                  hintText: '💬 Buscar SKU, UPC o frase IA (ej. "bodega enero", "< 15 dias")...',
+                                  hintStyle: const TextStyle(fontSize: 11, color: Colors.white54),
+                                  prefixIcon: const Icon(Icons.search, color: Colors.amber, size: 18),
+                                  suffixIcon: _busquedaMision.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear, size: 16, color: Colors.white54),
+                                          onPressed: () {
+                                            _busquedaMisionCtrl.clear();
+                                            setState(() => _busquedaMision = '');
+                                          },
+                                        )
+                                      : null,
+                                  filled: true,
+                                  fillColor: Colors.white10,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                                ),
+                                onChanged: (val) => setState(() => _busquedaMision = val),
+                              ),
+                              const SizedBox(height: 6),
+                              // RENGLÓN 1: TIPO DE MISIÓN (100% ANCHO)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 3),
+                                child: Text('Filtro Tipo de Misión', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white10,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: _filtroTipoMision != null ? Colors.amber : Colors.white12),
+                                ),
                                 child: DropdownButtonHideUnderline(
                                   child: DropdownButton<int?>(
                                     isExpanded: true,
                                     dropdownColor: const Color(0xFF2C2C2C),
                                     value: _filtroTipoMision,
-                                    hint: const Text('Tipo de Misión', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    hint: const Text('Tipo de Misión', style: TextStyle(fontSize: 12, color: Colors.white54)),
                                     items: const [
-                                      DropdownMenuItem(value: null, child: Text('📋 Tipo: Todas las Misiones', style: TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 0, child: Text('🛒 Carrito Abandonado', style: TextStyle(fontSize: 11, color: Colors.deepOrangeAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 1, child: Text('🔥 Crítico ≤ 15 Días (Reactivación)', style: TextStyle(fontSize: 11, color: Colors.redAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 2, child: Text('🚨 Política Bodega (90 Días)', style: TextStyle(fontSize: 11, color: Colors.pinkAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 3, child: Text('⚠️ Caducidad Cercana (45 Días)', style: TextStyle(fontSize: 11, color: Colors.orangeAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 4, child: Text('🛒 Descontar Venta (SAP)', style: TextStyle(fontSize: 11, color: Colors.blueAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 5, child: Text('🔎 Validar Artículo Nuevo (Sin Match)', style: TextStyle(fontSize: 11, color: Colors.purpleAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: null, child: Text('📋 Tipo: Todas las Misiones', style: TextStyle(fontSize: 12, color: Colors.amberAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 0, child: Text('🛒 Carrito Abandonado', style: TextStyle(fontSize: 12, color: Colors.deepOrangeAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 1, child: Text('🔥 Crítico ≤ 15 Días (Reactivación)', style: TextStyle(fontSize: 12, color: Colors.redAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 2, child: Text('🚨 Política Bodega (90 Días)', style: TextStyle(fontSize: 12, color: Colors.pinkAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 3, child: Text('⚠️ Caducidad Cercana (45 Días)', style: TextStyle(fontSize: 12, color: Colors.orangeAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 4, child: Text('🛒 Descontar Venta (SAP)', style: TextStyle(fontSize: 12, color: Colors.blueAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 5, child: Text('🔎 Validar Artículo Nuevo (Sin Match)', style: TextStyle(fontSize: 12, color: Colors.purpleAccent, fontWeight: FontWeight.bold))),
                                     ],
                                     onChanged: (v) => setState(() => _filtroTipoMision = v),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Container(
-                                height: 44,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                              const SizedBox(height: 6),
+                              // RENGLÓN 2: PROVEEDOR (100% ANCHO)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 3),
+                                child: Text('Filtro Proveedor', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
                                 decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
                                 child: DropdownButtonHideUnderline(
                                   child: DropdownButton<String?>(
                                     isExpanded: true,
                                     dropdownColor: const Color(0xFF2C2C2C),
                                     value: provsDisponibles.contains(_filtroProveedorMision) ? _filtroProveedorMision : null,
-                                    hint: const Text('Filtro Proveedor', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    hint: const Text('Filtro Proveedor', style: TextStyle(fontSize: 12, color: Colors.white54)),
                                     items: [
-                                      const DropdownMenuItem(value: null, child: Text('Proveedor: Todos', style: TextStyle(fontSize: 11, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
-                                      ...provsDisponibles.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                                      const DropdownMenuItem(value: null, child: Text('Proveedor: Todos los Proveedores', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                      ...provsDisponibles.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
                                     ],
                                     onChanged: (v) => setState(() => _filtroProveedorMision = v),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              flex: 2,
-                              child: SelectorJerarquicoUbicacion(
+                              const SizedBox(height: 6),
+                              // RENGLÓN 3: UBICACIÓN / MUEBLE JERÁRQUICO (100% ANCHO)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 3),
+                                child: Text('Filtro Ubicación / Mueble (Desplegable por Nivel)', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              SelectorJerarquicoUbicacion(
                                 todasLasRutas: mueblesDisponibles,
                                 rutaSeleccionada: _filtroMuebleMision,
                                 permitirSeleccionParcial: true,
-                                textoRaizVacio: 'Mueble: Mostrar Todo',
+                                textoRaizVacio: '📍 Mueble: Mostrar Todo (PISO / BODEGA / DISPLAY)',
+                                conteoLotesPorRuta: conteoPorUbicacionMision,
                                 onRutaCambiada: (v) => setState(() => _filtroMuebleMision = v),
                               ),
-                            ),
-                            if (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null)
-                              IconButton(
-                                icon: const Icon(Icons.filter_alt_off, color: Colors.redAccent, size: 18),
-                                tooltip: 'Limpiar filtros',
-                                onPressed: () => setState(() {
-                                  _filtroProveedorMision = null;
-                                  _filtroMuebleMision = null;
-                                  _filtroTipoMision = null;
-                                }),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  if (hayFiltrosActivos) ...[
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.redAccent,
+                                          side: const BorderSide(color: Colors.redAccent),
+                                          padding: const EdgeInsets.symmetric(vertical: 6),
+                                        ),
+                                        icon: const Icon(Icons.filter_alt_off, size: 16),
+                                        label: const Text('Limpiar Filtros', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                        onPressed: () => setState(() {
+                                          _filtroProveedorMision = null;
+                                          _filtroMuebleMision = null;
+                                          _filtroTipoMision = null;
+                                          _anioFiltroHistMision = hoy.year;
+                                          _mesFiltroHistMision = hoy.month;
+                                          _semanaFiltroHistMision = null;
+                                        }),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                  ],
+                                  Expanded(
+                                    flex: 2,
+                                    child: InkWell(
+                                      onTap: () => setState(() => _filtrosOcultosMisiones = true),
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amber.withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                                        ),
+                                        child: const Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                            SizedBox(width: 4),
+                                            Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
                       Expanded(
                         child: lista.isEmpty
                             ? Center(
@@ -7931,22 +8771,25 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
                                     Text(
-                                      (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null)
+                                      hayFiltrosActivos
                                           ? 'No hay misiones que coincidan con este filtro.'
-                                          : (_verHistorial ? 'Aún no hay misiones en el historial.' : '¡Piso Limpio!\nSin misiones pendientes.'),
+                                          : (_verHistorial ? 'Aún no hay misiones en el historial de este periodo.' : '¡Piso Limpio!\nSin misiones pendientes.'),
                                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent),
                                       textAlign: TextAlign.center,
                                     ),
-                                    if (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null) ...[
+                                    if (hayFiltrosActivos) ...[
                                       const SizedBox(height: 14),
                                       ElevatedButton.icon(
                                         style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
                                         icon: const Icon(Icons.filter_alt_off, size: 18),
-                                        label: const Text('ELIMINAR FILTROS', style: TextStyle(fontWeight: FontWeight.bold)),
+                                        label: const Text('MOSTRAR TODAS', style: TextStyle(fontWeight: FontWeight.bold)),
                                         onPressed: () => setState(() {
                                           _filtroProveedorMision = null;
                                           _filtroMuebleMision = null;
                                           _filtroTipoMision = null;
+                                          _anioFiltroHistMision = null;
+                                          _mesFiltroHistMision = null;
+                                          _semanaFiltroHistMision = null;
                                         }),
                                       ),
                                     ],
@@ -7954,26 +8797,26 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 ),
                               )
                             : ListView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: lista.length,
-                    itemBuilder: (context, i) {
-                      var docMision = lista[i];
-                      var m = docMision.data() as Map<String, dynamic>;
-                      int prioridad = _getPriority(m);
-                      int? cantidad = m['cantidad'] ?? m['descontado'];
-                      DateTime? cad = (m['fechaCaducidad'] as Timestamp?)?.toDate();
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                itemCount: lista.length,
+                                itemBuilder: (context, i) {
+                                  var docMision = lista[i];
+                                  var m = docMision.data() as Map<String, dynamic>;
+                                  int prioridad = _getPriority(m);
+                                  int? cantidad = m['cantidad'] ?? m['descontado'];
+                                  DateTime? cad = (m['fechaCaducidad'] as Timestamp?)?.toDate();
 
-                      Color borderColor = _verHistorial
-                          ? Colors.green
-                          : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : (prioridad == 4 ? Colors.blueAccent : Colors.purpleAccent))));
+                                  Color borderColor = _verHistorial
+                                      ? Colors.green
+                                      : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : (prioridad == 4 ? Colors.blueAccent : Colors.purpleAccent))));
 
-                      return Card(
-                        color: Colors.white10,
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        clipBehavior: Clip.antiAlias,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: borderColor, width: 2)),
-                        child: Column(
-                          children: [
+                                  return Card(
+                                    color: Colors.white10,
+                                    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    clipBehavior: Clip.antiAlias,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: borderColor, width: 2)),
+                                    child: Column(
+                                      children: [
                             _buildHeader(prioridad, _verHistorial),
                             ListTile(
                               contentPadding: const EdgeInsets.all(12),
@@ -7984,6 +8827,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 children: [
                                   Text(m['descripcion'] ?? m['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                                   Text('SKU: ${m['sku'] ?? 'ND'} • Prov: ${m['nombreProveedor'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                                  Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(m)}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                                 ],
                               ),
                               subtitle: Column(
@@ -8366,7 +9210,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String? _filtroRiesgoEspecial;
   String? _filtroTipoUbicacion;
   String? _filtroMueble;
+  int? _filtroAnio = DateTime.now().year;
   int? _filtroMes;
+  bool _filtroSobrestockIA = false;
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -8384,6 +9230,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   @override
   void initState() {
     super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
     _inventarioStream = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').orderBy('fechaCaducidad').snapshots();
   }
 
@@ -8401,8 +9248,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     setState(() {
       _filtroRiesgoEspecial = riesgo;
       _filtroProveedor = null;
+      _filtroAnio = null;
       _filtroMes = null;
-      _filtroDescuadreSAP = false; 
+      _filtroDescuadreSAP = false;
+      _filtroSobrestockIA = false; 
       _filtroGrupo = null;
     });
   }
@@ -8547,6 +9396,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _infoRow("SKU", d['sku']),
+              _infoRow("UPC", JerarquiaUbicacionHelper.obtenerUpcVisual(d)),
               _infoRow("PROVEEDOR", d['nombreProveedor']),
               _infoRow("GRUPO", d['nombreGpoArticulos']),
               _infoRow("UBICACIÓN PISO", d['ubicacion']),
@@ -9012,6 +9862,210 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     html.Url.revokeObjectUrl(url);
   }
 
+  void _mostrarAuditorIASap(List<QueryDocumentSnapshot> todosDocs) {
+    Map<String, int> fisicoPorSku = {};
+    Map<String, int> pisoPorSku = {};
+    Map<String, int> bodegaPorSku = {};
+    Map<String, Map<String, dynamic>> muestraPorSku = {};
+
+    for (var doc in todosDocs) {
+      var d = doc.data() as Map<String, dynamic>;
+      String s = (d['sku'] ?? '').toString().trim();
+      if (s.isEmpty) continue;
+      int c = (d['cantidad'] ?? 0) as int;
+      String u = (d['ubicacion'] ?? '').toString().toUpperCase();
+      if (u == 'EN TRÁNSITO') continue;
+
+      fisicoPorSku[s] = (fisicoPorSku[s] ?? 0) + c;
+      if (u.contains('BODEGA')) {
+        bodegaPorSku[s] = (bodegaPorSku[s] ?? 0) + c;
+      } else {
+        pisoPorSku[s] = (pisoPorSku[s] ?? 0) + c;
+      }
+      muestraPorSku.putIfAbsent(s, () => d);
+    }
+
+    List<Map<String, dynamic>> estancadosEnBodega = [];
+    List<Map<String, dynamic>> mermaFantasma = [];
+    List<Map<String, dynamic>> sobrantesFisicos = [];
+
+    for (var entry in muestraPorSku.entries) {
+      String s = entry.key;
+      var d = entry.value;
+      int totalFis = fisicoPorSku[s] ?? 0;
+      int enPiso = pisoPorSku[s] ?? 0;
+      int enBod = bodegaPorSku[s] ?? 0;
+      int ohSap = int.tryParse((d['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
+      double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
+
+      if (enBod > 0 && enPiso == 0) {
+        estancadosEnBodega.add({
+          'sku': s,
+          'datos': d,
+          'enBodega': enBod,
+          'oh': ohSap,
+          'impacto': enBod * precio,
+        });
+      }
+
+      if (ohSap >= 0 && totalFis != ohSap) {
+        int diff = ohSap - totalFis;
+        if (diff > 0) {
+          mermaFantasma.add({
+            'sku': s,
+            'datos': d,
+            'fisico': totalFis,
+            'oh': ohSap,
+            'faltante': diff,
+            'impacto': diff * precio,
+          });
+        } else {
+          sobrantesFisicos.add({
+            'sku': s,
+            'datos': d,
+            'fisico': totalFis,
+            'oh': ohSap,
+            'sobrante': -diff,
+            'impacto': (-diff) * precio,
+          });
+        }
+      }
+    }
+
+    estancadosEnBodega.sort((a, b) => (b['impacto'] as double).compareTo(a['impacto'] as double));
+    mermaFantasma.sort((a, b) => (b['impacto'] as double).compareTo(a['impacto'] as double));
+    sobrantesFisicos.sort((a, b) => (b['impacto'] as double).compareTo(a['impacto'] as double));
+
+    int tabActiva = 0;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          List<Map<String, dynamic>> listaActual = tabActiva == 0
+              ? estancadosEnBodega
+              : (tabActiva == 1 ? mermaFantasma : sobrantesFisicos);
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.cyanAccent, width: 2)),
+            title: const Row(
+              children: [
+                Icon(Icons.policy, color: Colors.cyanAccent, size: 24),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('🕵️‍♂️ Auditor IA: SAP vs Piso y Bodega', style: TextStyle(color: Colors.cyanAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 410,
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: tabActiva == 0 ? Colors.pinkAccent.withOpacity(0.25) : Colors.white10,
+                            side: BorderSide(color: tabActiva == 0 ? Colors.pinkAccent : Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                          ),
+                          onPressed: () => setModalState(() => tabActiva = 0),
+                          child: Text('🚨 Bodega (${estancadosEnBodega.length})', style: TextStyle(color: tabActiva == 0 ? Colors.pinkAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: tabActiva == 1 ? Colors.orangeAccent.withOpacity(0.25) : Colors.white10,
+                            side: BorderSide(color: tabActiva == 1 ? Colors.orangeAccent : Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                          ),
+                          onPressed: () => setModalState(() => tabActiva = 1),
+                          child: Text('📉 Faltante (${mermaFantasma.length})', style: TextStyle(color: tabActiva == 1 ? Colors.orangeAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: tabActiva == 2 ? Colors.cyanAccent.withOpacity(0.25) : Colors.white10,
+                            side: BorderSide(color: tabActiva == 2 ? Colors.cyanAccent : Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                          ),
+                          onPressed: () => setModalState(() => tabActiva = 2),
+                          child: Text('📦 Sobrante (${sobrantesFisicos.length})', style: TextStyle(color: tabActiva == 2 ? Colors.cyanAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    tabActiva == 0
+                        ? 'Productos guardados en BODEGA con 0 piezas exhibidas en PISO (Toca uno para filtrarlo):'
+                        : (tabActiva == 1
+                            ? 'Merma Fantasma: SAP reporta más piezas (OH) de las que hay mapeadas en tienda:'
+                            : 'Sobrante Físico: Hay más piezas mapeadas en tienda que el OH teórico de SAP:'),
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: listaActual.isEmpty
+                        ? const Center(child: Text('¡Sin hallazgos en esta categoría!', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)))
+                        : ListView.builder(
+                            itemCount: listaActual.length,
+                            itemBuilder: (c, idx) {
+                              var item = listaActual[idx];
+                              var d = item['datos'] as Map<String, dynamic>;
+                              String s = item['sku'].toString();
+                              return Card(
+                                color: Colors.white10,
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                child: ListTile(
+                                  dense: true,
+                                  title: Text(d['descripcion'] ?? s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white)),
+                                  subtitle: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('SKU: $s • UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}', style: const TextStyle(color: Colors.greenAccent, fontSize: 10)),
+                                      if (tabActiva == 0)
+                                        Text('📦 En Bodega: ${item['enBodega']} pzas • En Piso: 0 pzas (Ubicación: ${d['ubicacion']})', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold))
+                                      else if (tabActiva == 1)
+                                        Text('📊 SAP OH: ${item['oh']} pzas vs Físico: ${item['fisico']} pzas (Faltan ${item['faltante']} pzas • MXN ${(item['impacto'] as double).toStringAsFixed(2)})', style: const TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold))
+                                      else
+                                        Text('📊 Físico: ${item['fisico']} pzas vs SAP OH: ${item['oh']} pzas (Sobran ${item['sobrante']} pzas)', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  trailing: const Icon(Icons.search, color: Colors.amber, size: 18),
+                                  onTap: () {
+                                    Navigator.pop(ctx);
+                                    _busquedaController.text = s;
+                                    setState(() {
+                                      _busqueda = s.toLowerCase();
+                                      _filtroAnio = null;
+                                      _filtroMes = null;
+                                    });
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR', style: TextStyle(color: Colors.white54))),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _descargarProximoMes(List<QueryDocumentSnapshot> todosLosDocs) {
     DateTime hoy = DateTime.now();
     int mesSig = hoy.month == 12 ? 1 : hoy.month + 1;
@@ -9087,11 +10141,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
             int dias = cad.difference(DateTime.now()).inDays;
 
-            bool coincideBusqueda = _busqueda.isEmpty ||
-                JerarquiaUbicacionHelper.coincideBusquedaInteligente(
-                  _busqueda,
-                  [data['descripcion']?.toString(), data['sku']?.toString(), data['ean']?.toString(), data['ubicacion']?.toString()],
-                );
+            bool coincideBusqueda = _busqueda.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busqueda, data);
             bool coincideProv = _filtroProveedor == null || prov == _filtroProveedor;
             bool coincideGpo = _filtroGrupo == null || gpo == _filtroGrupo;
             
@@ -9108,7 +10158,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 : [];
             bool coincideTipoUbi = true;
             bool coincideMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(ubi, prefijoUbi);
+            bool coincideAnio = _filtroAnio == null || cad.year == _filtroAnio;
             bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
+            bool coincideSobrestock = !_filtroSobrestockIA || JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(data) != null;
             bool coincideDescuadre = true;
             if (_filtroDescuadreSAP) {
               String skuRaw = (data['sku'] ?? '').toString();
@@ -9116,7 +10168,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               int ohSap = int.tryParse((data['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
               coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
             }
-            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideMes && coincideDescuadre;
+            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideAnio && coincideMes && coincideSobrestock && coincideDescuadre;
           }).toList();
 
           var docsFinales = docsFiltrados.take(100).toList();
@@ -9172,8 +10224,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                _filtroRiesgoEspecial = null;
       _filtroTipoUbicacion = null;
       _filtroMueble = null;
+      _filtroAnio = DateTime.now().year;
       _filtroMes = null;
       _filtroDescuadreSAP = false;
+      _filtroSobrestockIA = false;
                              });
                           }
                         ),
@@ -9202,13 +10256,39 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             if (_filtroDescuadreSAP) _filtroMes = null;
                           }),
                         ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _filtroSobrestockIA ? Colors.deepOrangeAccent : Colors.white10,
+                            foregroundColor: Colors.white,
+                            side: BorderSide(color: _filtroSobrestockIA ? Colors.amberAccent : Colors.deepOrangeAccent),
+                          ),
+                          icon: const Icon(Icons.psychology, size: 16),
+                          label: Text(_filtroSobrestockIA ? 'Viendo Sobrestock IA' : '🧠 Sobrestock IA', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onPressed: () => setState(() {
+                            _filtroSobrestockIA = !_filtroSobrestockIA;
+                            if (_filtroSobrestockIA) {
+                              _filtroAnio = null;
+                              _filtroMes = null;
+                            }
+                          }),
+                        ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.cyanAccent.withOpacity(0.18),
+                            foregroundColor: Colors.cyanAccent,
+                            side: const BorderSide(color: Colors.cyanAccent),
+                          ),
+                          icon: const Icon(Icons.policy, size: 16),
+                          label: const Text('🕵️‍♂️ Auditor IA SAP', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onPressed: () => _mostrarAuditorIASap(snapshot.data!.docs),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 10),
                     TextField(
                       controller: _busquedaController,
                       decoration: InputDecoration(
-                        hintText: 'Buscar SKU, UPC o Artículo...',
+                        hintText: '💬 Buscar SKU, UPC o frase IA (ej. "toyo bodega enero", "< 20 dias")...',
                         prefixIcon: const Icon(Icons.search, color: Colors.amber),
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
@@ -9294,6 +10374,60 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                       ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
                                     ],
                                     onChanged: (v) => setState(() => _filtroGrupo = v),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro Año', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 40,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<int?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroAnio,
+                                    hint: const Text('Filtro Año', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem<int?>(
+                                        value: null,
+                                        child: Text('Año: Todos los años', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                      ),
+                                      ...({
+                                        DateTime.now().year - 1,
+                                        DateTime.now().year,
+                                        DateTime.now().year + 1,
+                                        DateTime.now().year + 2,
+                                        DateTime.now().year + 3,
+                                        ...snapshot.data!.docs
+                                            .map((doc) => ((doc.data() as Map)['fechaCaducidad'] as Timestamp?)?.toDate().year)
+                                            .whereType<int>(),
+                                      }.toList()
+                                            ..sort())
+                                          .map((anio) => DropdownMenuItem<int?>(
+                                                value: anio,
+                                                child: Text(
+                                                  anio == DateTime.now().year ? '📅 Año: $anio (En curso)' : '📅 Año: $anio',
+                                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                                ),
+                                              )),
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroAnio = v),
                                   ),
                                 ),
                               ),
@@ -9449,6 +10583,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text('${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    if (JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d) != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d)!['detalle'].toString(),
+                                          style: const TextStyle(color: Colors.deepOrangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
                                     if (d['edicionTemporal'] == true)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),

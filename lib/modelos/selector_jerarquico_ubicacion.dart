@@ -2,6 +2,51 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class JerarquiaUbicacionHelper {
+  static final Map<String, String> _cacheUpcPorSku = {};
+  static bool _cargandoCacheUpc = false;
+  static bool _cacheUpcListo = false;
+  static final ValueNotifier<int> upcCacheVersion = ValueNotifier<int>(0);
+
+  static Future<void> precargarCacheUpc() async {
+    if (_cacheUpcListo || _cargandoCacheUpc) return;
+    _cargandoCacheUpc = true;
+    try {
+      var snap = await FirebaseFirestore.instance.collection('maestro_productos').get();
+      for (var doc in snap.docs) {
+        var d = doc.data();
+        String s = (d['sku'] ?? '').toString().trim();
+        String e = (d['ean'] ?? '').toString().trim();
+        if (s.isNotEmpty && e.isNotEmpty && e != '0' && e != 'NaN') {
+          _cacheUpcPorSku[s] = e;
+        }
+      }
+      _cacheUpcListo = true;
+      upcCacheVersion.value++;
+    } catch (_) {
+    } finally {
+      _cargandoCacheUpc = false;
+    }
+  }
+
+  static String obtenerUpcVisual(Map<String, dynamic>? d) {
+    if (!_cacheUpcListo && !_cargandoCacheUpc) {
+      precargarCacheUpc();
+    }
+    if (d == null) return 'ND';
+    String ean = (d['ean'] ?? '').toString().trim();
+    if (ean.isNotEmpty && ean != '0' && ean != 'NaN') return ean;
+
+    String sku = (d['sku'] ?? '').toString().trim();
+    if (sku.isNotEmpty && _cacheUpcPorSku.containsKey(sku)) {
+      return _cacheUpcPorSku[sku]!;
+    }
+
+    String orig = (d['codigoOriginalCapturado'] ?? '').toString().trim();
+    if (orig.length >= 8 && orig != sku) return orig;
+    if (sku.length >= 11) return sku;
+    return 'SIN UPC';
+  }
+
   // Normaliza texto quitando acentos, diéresis, signos y exceso de espacios
   static String normalizarTextoBusqueda(String input) {
     if (input.isEmpty) return '';
@@ -17,14 +62,14 @@ class JerarquiaUbicacionHelper {
     mapaAcentos.forEach((k, v) {
       s = s.replaceAll(k, v);
     });
-    s = s.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+    s = s.replaceAll(RegExp(r'[^a-z0-9\s<>]'), ' ');
     s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
     return s;
   }
 
   static bool coincideBusquedaInteligente(String consultaRaw, List<String?> camposDocumento) {
-    String q = normalizarTextoBusqueda(consultaRaw);
-    if (q.isEmpty) return true;
+    String q = normalizarTextoBusqueda(consultaRaw).replaceAll(RegExp(r'[<>]'), ' ');
+    if (q.trim().isEmpty) return true;
     List<String> palabras = q.split(' ').where((w) => w.isNotEmpty).toList();
     String acumulado = camposDocumento
         .map((c) => normalizarTextoBusqueda(c ?? ''))
@@ -35,7 +80,195 @@ class JerarquiaUbicacionHelper {
     return true;
   }
 
-  // Diccionario de expansión semántica (Traduce nombres comerciales/inglés a abreviaturas SAP)
+  // IA 1: PREDICTOR DE RIESGO DE NO VENTA (SOBRESTOCK VS DÍAS PARA VENCER)
+  static Map<String, dynamic>? analizarRiesgoSobrestockIA(Map<String, dynamic> d) {
+    Timestamp? ts = d['fechaCaducidad'];
+    if (ts == null) return null;
+    int dias = ts.toDate().difference(DateTime.now()).inDays;
+    int cant = (d['cantidad'] ?? 0) as int;
+
+    if (cant <= 1 || dias <= 0 || dias > 100) return null;
+
+    double ventaDiaria = double.tryParse((d['ventaDiariaPromedio'] ?? 0).toString()) ?? 0.0;
+    if (ventaDiaria > 0) {
+      double diasNecesarios = cant / ventaDiaria;
+      if (diasNecesarios > dias * 1.15) {
+        int sobrantes = (cant - (ventaDiaria * dias).floor()).clamp(1, cant);
+        return {
+          'enRiesgo': true,
+          'pzasEnRiesgo': sobrantes,
+          'detalle': '🧠 IA SOBRESTOCK: Al ritmo de venta (${ventaDiaria.toStringAsFixed(1)}/día), sobrarán ~$sobrantes pzas al vencer.',
+        };
+      }
+    }
+
+    // Heurística preventiva cuando un lote acumula demasiado volumen para su ventana de vida
+    bool volumenAlto = (dias <= 20 && cant >= 6) ||
+        (dias <= 35 && cant >= 10) ||
+        (dias <= 60 && cant >= 18) ||
+        (dias <= 90 && cant >= 30);
+
+    if (volumenAlto) {
+      double ventaSemanalRequerida = (cant / dias) * 7.0;
+      if (ventaSemanalRequerida >= 2.0) {
+        return {
+          'enRiesgo': true,
+          'pzasEnRiesgo': (cant * 0.5).round(),
+          'detalle': '🧠 IA SOBRESTOCK: $cant pzas para $dias días (Requiere vender ${ventaSemanalRequerida.toStringAsFixed(1)} pzas/sem). Priorizar exhibición.',
+        };
+      }
+    }
+    return null;
+  }
+
+  // IA 2: AUTO-RECOMENDADOR DE INSTRUCCIÓN CORPORATIVA
+  static Map<String, String> recomendarInstruccionCorporativaIA(Map<String, dynamic> d) {
+    Timestamp? ts = d['fechaCaducidad'];
+    int dias = ts != null ? ts.toDate().difference(DateTime.now()).inDays : 30;
+    int cant = (d['cantidad'] ?? 1) as int;
+    String gpo = (d['nombreGpoArticulos'] ?? '').toString().toUpperCase();
+    String desc = (d['descripcion'] ?? '').toString().toUpperCase();
+    String prov = (d['nombreProveedor'] ?? '').toString().toUpperCase();
+
+    if (desc.contains('ARTÍCULO NUEVO') || prov.contains('SIN MATCH')) {
+      return {
+        'comentario': 'SKU INEXISTENTE',
+        'razon': 'Lote sin match en catálogo SAP',
+      };
+    }
+    if (gpo.contains('VINO') || gpo.contains('LICOR') || desc.contains('VINO') || desc.contains('LICOR') || desc.contains('SAKE') || desc.contains('CERVEZA')) {
+      return {
+        'comentario': 'REVISAR CON EQUIPO COMERCIAL DE VINOS Y LICORES',
+        'razon': 'Categoría Vinos y Licores detectada',
+      };
+    }
+    if (dias < 0) {
+      return {
+        'comentario': 'MERMAR YA QUE NO SE COMPARTIÓ EN LAS FECHAS CORRECTAS',
+        'razon': 'Lote ya vencido ($dias días)',
+      };
+    }
+    if (dias <= 15) {
+      return {
+        'comentario': '15 DÍAS ANTES DE CADUCAR, PONER EL 50% DE DESCUENTO; SI NO SE VENDE, SE DA DE BAJA',
+        'razon': 'Ventana crítica ≤ 15 días ($dias d)',
+      };
+    }
+    if (dias <= 25 && cant >= 10) {
+      return {
+        'comentario': 'PRODUCTO DE TEMPORADA, APLICAR EL 50% DE DESCUENTO',
+        'razon': 'Volumen alto ($cant pzas) con $dias días restantes',
+      };
+    }
+    if (gpo.contains('DULCE') || gpo.contains('CONFITERIA') || gpo.contains('CHOCOLAT') || desc.contains('GOMITA') || desc.contains('POCKY') || desc.contains('GALLETA')) {
+      if (dias <= 30) {
+        return {
+          'comentario': 'GESTIONAR CAMBIO FÍSICO CON PROVEEDOR. EN CASO DE NO OBTENER RESPUESTA, DESTRUCCIÓN CON EVIDENCIA POR CORREO AL PROVEEDOR Y EQUIPO COMERCIAL',
+          'razon': 'Dulcería / Confitería en ventana de 30 días',
+        };
+      }
+      return {
+        'comentario': 'REVISAR CON EQUIPO COMERCIAL DE DULCERÍA',
+        'razon': 'Categoría Dulcería / Importados ($dias d)',
+      };
+    }
+    if (dias <= 35) {
+      return {
+        'comentario': 'REVISAR CON PROVEEDOR SI PROCEDE CAMBIO FÍSICO O DEVOLUCIÓN CON DESTRUCCIÓN',
+        'razon': 'Ventana preventiva de negociación ($dias d)',
+      };
+    }
+    return {
+      'comentario': 'PRODUCTO DE TEMPORADA, APLICAR EL 40% DE DESCUENTO',
+      'razon': 'Desplazamiento preventivo ($dias d • $cant pzas)',
+    };
+  }
+
+  // IA 4: BUSCADOR POR LENGUAJE NATURAL (Ej. "comercial toyo en bodega enero", "menos de 20 dias en piso")
+  static const Map<String, int> _mesesLenguajeNatural = {
+    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+    'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+    'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12,
+  };
+
+  static bool evaluarConsultaLenguajeNaturalIA(String consultaRaw, Map<String, dynamic> d) {
+    String q = normalizarTextoBusqueda(consultaRaw);
+    if (q.isEmpty) return true;
+
+    Timestamp? ts = d['fechaCaducidad'] ?? d['fechaGeneracion'];
+    DateTime? cad = ts?.toDate();
+    int dias = cad != null ? cad.difference(DateTime.now()).inDays : 999;
+
+    // 1. Detectar expresiones de límite máximo de días: "menos de 20 dias", "menor a 15 dias", "< 30 dias"
+    final regMenosDias = RegExp(r'(?:menos de|menor a|menores a|maximo|hasta|<|<=)\s*(\d+)\s*(?:dias|dia|d)?\b');
+    var matchMenos = regMenosDias.firstMatch(q);
+    if (matchMenos != null) {
+      int lim = int.tryParse(matchMenos.group(1)!) ?? 999;
+      if (dias > lim) return false;
+      q = q.replaceFirst(regMenosDias, ' ').trim();
+    }
+
+    // 2. Detectar expresiones de límite mínimo de días: "mas de 30 dias", "mayor a 45 dias", "> 60 dias"
+    final regMasDias = RegExp(r'(?:mas de|mayor a|mayores a|minimo|>|>=)\s*(\d+)\s*(?:dias|dia|d)?\b');
+    var matchMas = regMasDias.firstMatch(q);
+    if (matchMas != null) {
+      int lim = int.tryParse(matchMas.group(1)!) ?? 0;
+      if (dias < lim) return false;
+      q = q.replaceFirst(regMasDias, ' ').trim();
+    }
+
+    // 3. Palabras clave de estado operativo
+    List<String> tokens = q.replaceAll(RegExp(r'[<>]'), ' ').split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    List<String> tokensRestantes = [];
+
+    const stopwords = {
+      'en', 'de', 'del', 'con', 'que', 'vencen', 'vence', 'caducan', 'caduca',
+      'para', 'el', 'la', 'los', 'las', 'un', 'una', 'lotes', 'lote',
+      'productos', 'producto', 'articulos', 'dias', 'dia', 'mes', 'por'
+    };
+
+    for (String t in tokens) {
+      if (t == 'caducado' || t == 'caducados' || t == 'vencido' || t == 'vencidos') {
+        if (dias >= 0) return false;
+        continue;
+      }
+      if (t == 'critico' || t == 'criticos') {
+        if (dias < 0 || dias > 15) return false;
+        continue;
+      }
+      if (t == 'sobrestock') {
+        if (analizarRiesgoSobrestockIA(d) == null) return false;
+        continue;
+      }
+      if (t == 'promocion' || t == 'saldado') {
+        if (d['enPromocion'] != true) return false;
+        continue;
+      }
+      if (t == 'temporal' || t == 'temporales') {
+        if (d['edicionTemporal'] != true) return false;
+        continue;
+      }
+      if (_mesesLenguajeNatural.containsKey(t)) {
+        if (cad == null || cad.month != _mesesLenguajeNatural[t]) return false;
+        continue;
+      }
+      if (stopwords.contains(t)) continue;
+      tokensRestantes.add(t);
+    }
+
+    if (tokensRestantes.isEmpty) return true;
+
+    String upc = obtenerUpcVisual(d);
+    String acumulado = normalizarTextoBusqueda(
+      '${d['descripcion'] ?? ''} ${d['sku'] ?? ''} ${d['ean'] ?? ''} $upc ${d['nombreProveedor'] ?? ''} ${d['nombreGpoArticulos'] ?? ''} ${d['ubicacion'] ?? ''} ${d['mensaje'] ?? ''}',
+    );
+
+    for (String p in tokensRestantes) {
+      if (!acumulado.contains(p)) return false;
+    }
+    return true;
+  }
+
   static const Map<String, List<String>> _diccionarioSemanticoSAP = {
     'tea': ['te', 'beb', 'infusion'],
     'te': ['tea', 'beb', 'infusion'],
@@ -81,7 +314,6 @@ class JerarquiaUbicacionHelper {
     'korean': ['coreano', 'coreana', 'corea'],
   };
 
-  // Similitud de bigramas (Dice coefficient) para tolerar errores de dedo o abreviaturas
   static double _similitudBigramas(String a, String b) {
     if (a == b) return 1.0;
     if (a.length < 2 || b.length < 2) return 0.0;
@@ -97,7 +329,6 @@ class JerarquiaUbicacionHelper {
     return (2.0 * interseccion) / (bgA.length + bgB.length);
   }
 
-  // MOTOR IA SEMÁNTICO: Busca coincidencias en el catálogo SAP entendiendo abreviaturas, inglés, gramajes y errores ortográficos
   static List<Map<String, dynamic>> buscarSugerenciasSemanticasIA(
     String consultaComercial,
     Iterable<Map<String, dynamic>> catalogoCompleto,
@@ -112,7 +343,6 @@ class JerarquiaUbicacionHelper {
 
     if (tokensOriginales.isEmpty) return [];
 
-    // Extraer posibles números de gramaje (ej. "500ml" -> "500", "140g" -> "140")
     Set<String> numerosGramaje = {};
     for (var m in RegExp(r'\d{2,4}').allMatches(consultaComercial)) {
       numerosGramaje.add(m.group(0)!);
@@ -135,14 +365,12 @@ class JerarquiaUbicacionHelper {
       List<String> razones = [];
 
       for (String tokenQ in tokensOriginales) {
-        // 1. Coincidencia directa o prefijo en SAP
         if (tokensProd.any((tp) => tp == tokenQ || tp.startsWith(tokenQ) || tokenQ.startsWith(tp) && tp.length >= 3)) {
           puntos += 10.0;
           razones.add(tokenQ.toUpperCase());
           continue;
         }
 
-        // 2. Expansión por Diccionario Semántico IA (Inglés / Abreviaturas SAP)
         List<String> sinonimos = _diccionarioSemanticoSAP[tokenQ] ?? [];
         bool matchSinonimo = false;
         for (String sin in sinonimos) {
@@ -155,7 +383,6 @@ class JerarquiaUbicacionHelper {
         }
         if (matchSinonimo) continue;
 
-        // 3. Coincidencia difusa (errores de dedo o palabras recortadas en SAP)
         double mejorSim = 0.0;
         for (String tp in tokensProd) {
           double sim = _similitudBigramas(tokenQ, tp);
@@ -166,7 +393,6 @@ class JerarquiaUbicacionHelper {
         }
       }
 
-      // 4. Bono por coincidencia de gramaje/presentación (.500, .140, .105)
       for (String numG in numerosGramaje) {
         if (desc.contains('.$numG') || textoProdNorm.contains(numG)) {
           puntos += 4.5;
@@ -263,6 +489,10 @@ class JerarquiaUbicacionHelper {
     String eanFinal = (nuevoEan != null && nuevoEan.trim().isNotEmpty)
         ? nuevoEan.trim()
         : (datosMaestros?['ean']?.toString().trim() ?? (codigoViejo.length >= 11 && codigoViejo != skuFinal ? codigoViejo : ''));
+
+    if (skuFinal.isNotEmpty && eanFinal.isNotEmpty) {
+      _cacheUpcPorSku[skuFinal] = eanFinal;
+    }
 
     String descFinal = (esMatchOficialSAP && datosMaestros!['descripcion'] != null)
         ? datosMaestros['descripcion'].toString().trim()

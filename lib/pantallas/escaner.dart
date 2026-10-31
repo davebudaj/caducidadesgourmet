@@ -47,6 +47,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   @override
   void initState() {
     super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
     try {
       String? camPref = html.window.localStorage['gg_camara_activa'];
       if (camPref != null) _camaraActiva = camPref == 'true';
@@ -449,6 +450,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                   const SizedBox(height: 4),
                   Text(descProducto, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
                   Text('SKU: $skuOficial', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                  Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(lotesDisponibles.first.data())}', style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.w600, fontSize: 11)),
                 ],
               ),
               content: SizedBox(
@@ -1212,6 +1214,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
         var map = <String, dynamic>{
           'sku': _skuOficial,
           'codigoOriginalCapturado': widget.skuEscaneado.trim(),
+          'ean': (_datosMaestros?['ean'] ?? (widget.skuEscaneado.trim().length >= 8 && widget.skuEscaneado.trim() != _skuOficial ? widget.skuEscaneado.trim() : '')).toString(),
           if (esTemp && _descripcion != 'Artículo Nuevo') 'edicionTemporal': true,
           'descripcion': _descripcion,
           'ubicacion': _ubicacionSeleccionada,
@@ -1309,7 +1312,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             TextField(
               controller: manualFechaCtrl,
               autofocus: true,
-              keyboardType: TextInputType.datetime,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.amberAccent),
               decoration: const InputDecoration(
                 labelText: 'Escribe la fecha de caducidad',
@@ -1345,20 +1348,32 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
       context: context,
       builder: (context) => Dialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.amber, width: 1.2)),
         child: Container(
-          height: 370,
-          padding: const EdgeInsets.all(16),
+          width: 420,
+          height: 495,
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 14),
           child: Column(
             children: [
               const Text('Fecha de Caducidad', style: TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               Expanded(
-                child: CalendarDatePicker(
-                  initialDate: tempDate,
-                  firstDate: DateTime(hoy.year, hoy.month, hoy.day),
-                  lastDate: DateTime(hoy.year + 10, hoy.month, hoy.day),
-                  onDateChanged: (DateTime newDate) => tempDate = newDate,
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    colorScheme: const ColorScheme.dark(
+                      primary: Colors.amber,
+                      onPrimary: Colors.black,
+                      surface: Color(0xFF1E1E1E),
+                      onSurface: Colors.white,
+                    ),
+                  ),
+                  child: CalendarDatePicker(
+                    initialDate: tempDate,
+                    firstDate: DateTime(hoy.year, hoy.month, hoy.day),
+                    lastDate: DateTime(hoy.year + 10, hoy.month, hoy.day),
+                    onDateChanged: (DateTime newDate) => tempDate = newDate,
+                  ),
                 ),
               ),
               Wrap(
@@ -1410,6 +1425,11 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             Text(_descripcion, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.amber), textAlign: TextAlign.center),
             const SizedBox(height: 8),
             Text('SKU Oficial: $_skuOficial', style: const TextStyle(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text(
+              'UPC: ${(_datosMaestros?['ean'] != null && _datosMaestros!['ean'].toString().trim().isNotEmpty) ? _datosMaestros!['ean'] : (widget.skuEscaneado.trim() != _skuOficial ? widget.skuEscaneado.trim() : JerarquiaUbicacionHelper.obtenerUpcVisual(_datosMaestros))}',
+              style: const TextStyle(fontSize: 13, color: Colors.cyanAccent, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 25),
             TextField(controller: _cantidadController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Cantidad de Piezas', filled: true)),
             const SizedBox(height: 20),

@@ -15,12 +15,37 @@ class PantallaMisiones extends StatefulWidget {
 }
 
 class _PantallaMisionesState extends State<PantallaMisiones> {
+  final TextEditingController _busquedaMisionCtrl = TextEditingController();
+  String _busquedaMision = '';
   bool _actualizando = false;
   bool _verHistorial = false;
+  bool _filtrosOcultosMisiones = false;
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
   int? _filtroTipoMision;
+  int? _anioFiltroHistMision = DateTime.now().year;
+  int? _mesFiltroHistMision = DateTime.now().month;
+  int? _semanaFiltroHistMision;
+
   static const String kUbicacionTransito = 'EN TRÁNSITO';
+  static const int kLimiteHistorialMisiones = 100;
+  static const int kDiasVentanaHistorialMisiones = 92; // 3 meses
+
+  static const Map<int, String> _nombresMesesMision = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
+  }
+
+  int _calcularSemanaMision(DateTime fecha) {
+    return ((fecha.day - 1) ~/ 7) + 1;
+  }
 
   CollectionReference<Map<String, dynamic>> get _refInv =>
       FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo');
@@ -626,7 +651,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 child: Text('🧠 ${item['scoreIA'] ?? 90}%', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
                               ),
                               title: Text(item['descripcion'] ?? '', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
-                              subtitle: Text('SKU: ${item['sku']} • ${item['nombreProveedor'] ?? 'ND'}\nCoincidencia: ${item['razonIA'] ?? 'Semántica'}', style: const TextStyle(fontSize: 10, color: Colors.amberAccent)),
+                              subtitle: Text('SKU: ${item['sku']} • UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(item)}\nProv: ${item['nombreProveedor'] ?? 'ND'} (${item['razonIA'] ?? 'Semántica'})', style: const TextStyle(fontSize: 10, color: Colors.amberAccent)),
                               onTap: () {
                                 setModalState(() {
                                   datosMaestrosEncontrados = item;
@@ -878,6 +903,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               Text(m['descripcion'] ?? sku, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 13)),
               const SizedBox(height: 2),
               Text('SKU: $sku', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+              Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(m)}', style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.w600, fontSize: 11)),
               const SizedBox(height: 6),
               Text(
                 'Pendiente por validar: $pendientes pza(s) vendida(s) en SAP.',
@@ -1229,7 +1255,21 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
 
                   String estadoBuscado = _verHistorial ? 'completada' : 'pendiente';
-                  var baseDocs = snapshot.data!.docs.where((doc) => (doc.data() as Map<String, dynamic>)['estado'] == estadoBuscado).toList();
+                  DateTime hoy = DateTime.now();
+                  DateTime corte3Meses = hoy.subtract(const Duration(days: kDiasVentanaHistorialMisiones));
+                  List<int> aniosHistDisponibles = {hoy.year, corte3Meses.year}.toList()..sort((a, b) => b.compareTo(a));
+
+                  var baseDocs = snapshot.data!.docs.where((doc) {
+                    var d = doc.data() as Map<String, dynamic>;
+                    if (d['estado'] != estadoBuscado) return false;
+                    if (_verHistorial) {
+                      Timestamp? ts = d['fechaGeneracion'] ?? d['fechaCaducidad'];
+                      if (ts != null && ts.toDate().isBefore(corte3Meses)) {
+                        return false;
+                      }
+                    }
+                    return true;
+                  }).toList();
 
                   var provsDisponibles = baseDocs
                       .map((d) => ((d.data() as Map<String, dynamic>)['nombreProveedor'] ?? 'ND').toString())
@@ -1237,13 +1277,16 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       .toList()
                     ..sort();
 
-                  var mueblesDisponibles = baseDocs
-                      .map((d) => ((d.data() as Map<String, dynamic>)['ubicacion'] ?? 'ND').toString())
-                      .toSet()
-                      .toList()
-                    ..sort();
+                  Map<String, int> conteoPorUbicacionMision = {};
+                  for (var doc in baseDocs) {
+                    String u = ((doc.data() as Map<String, dynamic>)['ubicacion'] ?? 'ND').toString().trim();
+                    if (u.isNotEmpty) {
+                      conteoPorUbicacionMision[u] = (conteoPorUbicacionMision[u] ?? 0) + 1;
+                    }
+                  }
+                  var mueblesDisponibles = JerarquiaUbicacionHelper.ordenarRutasPorJerarquia(conteoPorUbicacionMision.keys);
 
-                  var lista = baseDocs.where((doc) {
+                  var listaFiltrada = baseDocs.where((doc) {
                     var d = doc.data() as Map<String, dynamic>;
                     String p = (d['nombreProveedor'] ?? 'ND').toString();
                     String u = (d['ubicacion'] ?? 'ND').toString();
@@ -1254,10 +1297,23 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                     bool okMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(u, prefMueble);
                     int tipoPrio = _getPriority(d);
                     bool okTipo = _filtroTipoMision == null || tipoPrio == _filtroTipoMision;
-                    return okProv && okMueble && okTipo;
+
+                    bool okFechaHist = true;
+                    if (_verHistorial) {
+                      Timestamp? ts = d['fechaGeneracion'] ?? d['fechaCaducidad'];
+                      if (ts != null) {
+                        DateTime dt = ts.toDate();
+                        if (_anioFiltroHistMision != null && dt.year != _anioFiltroHistMision) okFechaHist = false;
+                        if (_mesFiltroHistMision != null && dt.month != _mesFiltroHistMision) okFechaHist = false;
+                        if (_semanaFiltroHistMision != null && _calcularSemanaMision(dt) != _semanaFiltroHistMision) okFechaHist = false;
+                      }
+                    }
+
+                    bool okBusqueda = _busquedaMision.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busquedaMision, d);
+                    return okProv && okMueble && okTipo && okFechaHist && okBusqueda;
                   }).toList();
 
-                  lista.sort((a, b) {
+                  listaFiltrada.sort((a, b) {
                     var dA = a.data() as Map<String, dynamic>;
                     var dB = b.data() as Map<String, dynamic>;
                     if (!_verHistorial) {
@@ -1270,84 +1326,317 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                     return tB.compareTo(tA);
                   });
 
+                  var lista = _verHistorial
+                      ? listaFiltrada.take(kLimiteHistorialMisiones).toList()
+                      : listaFiltrada;
+
+                  bool hayFiltrosActivos = _busquedaMision.isNotEmpty || _filtroProveedorMision != null ||
+                      _filtroMuebleMision != null ||
+                      _filtroTipoMision != null ||
+                      (_verHistorial && (_anioFiltroHistMision != hoy.year || _mesFiltroHistMision != hoy.month || _semanaFiltroHistMision != null));
+
                   return Column(
                     children: [
-                      Container(
-                        color: Colors.black,
-                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Container(
-                                height: 44,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: _filtroTipoMision != null ? Colors.amber : Colors.white12)),
+                      if (_filtrosOcultosMisiones)
+                        InkWell(
+                          onTap: () => setState(() => _filtrosOcultosMisiones = false),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.black,
+                              border: Border(bottom: BorderSide(color: Colors.amber.withOpacity(0.6), width: 1.5)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber, size: 20),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Bajar Filtros (${lista.length} ${_verHistorial ? "en historial" : "misiones"})',
+                                  style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.tune, color: Colors.amberAccent, size: 15),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        Container(
+                          color: Colors.black,
+                          padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (_verHistorial) ...[
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      '⚡ Historial limitado a 3 meses (Máx. 100 misiones)',
+                                      style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                    ),
+                                    if (hayFiltrosActivos)
+                                      TextButton.icon(
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                        icon: const Icon(Icons.refresh, color: Colors.amberAccent, size: 14),
+                                        label: const Text('Restaurar Mes', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                        onPressed: () => setState(() {
+                                          _filtroProveedorMision = null;
+                                          _filtroMuebleMision = null;
+                                          _filtroTipoMision = null;
+                                          _anioFiltroHistMision = hoy.year;
+                                          _mesFiltroHistMision = hoy.month;
+                                          _semanaFiltroHistMision = null;
+                                        }),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Padding(
+                                            padding: EdgeInsets.only(left: 4, bottom: 3),
+                                            child: Text('Filtro Año', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                          ),
+                                          Container(
+                                            height: 40,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                            child: DropdownButtonHideUnderline(
+                                              child: DropdownButton<int?>(
+                                                isExpanded: true,
+                                                dropdownColor: const Color(0xFF2C2C2C),
+                                                value: aniosHistDisponibles.contains(_anioFiltroHistMision) ? _anioFiltroHistMision : null,
+                                                items: [
+                                                  const DropdownMenuItem(value: null, child: Text('Año: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                                  ...aniosHistDisponibles.map((a) => DropdownMenuItem(value: a, child: Text('📅 Año $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                                ],
+                                                onChanged: (v) => setState(() => _anioFiltroHistMision = v),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Padding(
+                                            padding: EdgeInsets.only(left: 4, bottom: 3),
+                                            child: Text('Filtro Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                          ),
+                                          Container(
+                                            height: 40,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                            child: DropdownButtonHideUnderline(
+                                              child: DropdownButton<int?>(
+                                                isExpanded: true,
+                                                dropdownColor: const Color(0xFF2C2C2C),
+                                                value: _mesFiltroHistMision,
+                                                items: [
+                                                  const DropdownMenuItem(value: null, child: Text('Mes: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                                  ..._nombresMesesMision.entries.map((e) => DropdownMenuItem(value: e.key, child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                                ],
+                                                onChanged: (v) => setState(() {
+                                                  _mesFiltroHistMision = v;
+                                                  if (v == null) _semanaFiltroHistMision = null;
+                                                }),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4, bottom: 3),
+                                  child: Text('Filtro Semana del Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                ),
+                                Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<int?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: _semanaFiltroHistMision,
+                                      items: const [
+                                        DropdownMenuItem(value: null, child: Text('Semana: Todas las semanas del mes', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                        DropdownMenuItem(value: 1, child: Text('Semana 1 (Días 1 al 7)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 2, child: Text('Semana 2 (Días 8 al 14)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 3, child: Text('Semana 3 (Días 15 al 21)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 4, child: Text('Semana 4 (Días 22 al 28)', style: TextStyle(fontSize: 12))),
+                                        DropdownMenuItem(value: 5, child: Text('Semana 5 (Días 29 al 31)', style: TextStyle(fontSize: 12))),
+                                      ],
+                                      onChanged: (v) => setState(() => _semanaFiltroHistMision = v),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                              ],
+                              TextField(
+                                controller: _busquedaMisionCtrl,
+                                decoration: InputDecoration(
+                                  hintText: '💬 Buscar SKU, UPC o frase IA (ej. "bodega enero", "< 15 dias")...',
+                                  hintStyle: const TextStyle(fontSize: 11, color: Colors.white54),
+                                  prefixIcon: const Icon(Icons.search, color: Colors.amber, size: 18),
+                                  suffixIcon: _busquedaMision.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear, size: 16, color: Colors.white54),
+                                          onPressed: () {
+                                            _busquedaMisionCtrl.clear();
+                                            setState(() => _busquedaMision = '');
+                                          },
+                                        )
+                                      : null,
+                                  filled: true,
+                                  fillColor: Colors.white10,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                                ),
+                                onChanged: (val) => setState(() => _busquedaMision = val),
+                              ),
+                              const SizedBox(height: 6),
+                              // RENGLÓN 1: TIPO DE MISIÓN (100% ANCHO)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 3),
+                                child: Text('Filtro Tipo de Misión', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white10,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: _filtroTipoMision != null ? Colors.amber : Colors.white12),
+                                ),
                                 child: DropdownButtonHideUnderline(
                                   child: DropdownButton<int?>(
                                     isExpanded: true,
                                     dropdownColor: const Color(0xFF2C2C2C),
                                     value: _filtroTipoMision,
-                                    hint: const Text('Tipo de Misión', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    hint: const Text('Tipo de Misión', style: TextStyle(fontSize: 12, color: Colors.white54)),
                                     items: const [
-                                      DropdownMenuItem(value: null, child: Text('📋 Tipo: Todas las Misiones', style: TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 0, child: Text('🛒 Carrito Abandonado', style: TextStyle(fontSize: 11, color: Colors.deepOrangeAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 1, child: Text('🔥 Crítico ≤ 15 Días (Reactivación)', style: TextStyle(fontSize: 11, color: Colors.redAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 2, child: Text('🚨 Política Bodega (90 Días)', style: TextStyle(fontSize: 11, color: Colors.pinkAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 3, child: Text('⚠️ Caducidad Cercana (45 Días)', style: TextStyle(fontSize: 11, color: Colors.orangeAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 4, child: Text('🛒 Descontar Venta (SAP)', style: TextStyle(fontSize: 11, color: Colors.blueAccent, fontWeight: FontWeight.bold))),
-                                      DropdownMenuItem(value: 5, child: Text('🔎 Validar Artículo Nuevo (Sin Match)', style: TextStyle(fontSize: 11, color: Colors.purpleAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: null, child: Text('📋 Tipo: Todas las Misiones', style: TextStyle(fontSize: 12, color: Colors.amberAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 0, child: Text('🛒 Carrito Abandonado', style: TextStyle(fontSize: 12, color: Colors.deepOrangeAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 1, child: Text('🔥 Crítico ≤ 15 Días (Reactivación)', style: TextStyle(fontSize: 12, color: Colors.redAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 2, child: Text('🚨 Política Bodega (90 Días)', style: TextStyle(fontSize: 12, color: Colors.pinkAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 3, child: Text('⚠️ Caducidad Cercana (45 Días)', style: TextStyle(fontSize: 12, color: Colors.orangeAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 4, child: Text('🛒 Descontar Venta (SAP)', style: TextStyle(fontSize: 12, color: Colors.blueAccent, fontWeight: FontWeight.bold))),
+                                      DropdownMenuItem(value: 5, child: Text('🔎 Validar Artículo Nuevo (Sin Match)', style: TextStyle(fontSize: 12, color: Colors.purpleAccent, fontWeight: FontWeight.bold))),
                                     ],
                                     onChanged: (v) => setState(() => _filtroTipoMision = v),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Container(
-                                height: 44,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                              const SizedBox(height: 6),
+                              // RENGLÓN 2: PROVEEDOR (100% ANCHO)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 3),
+                                child: Text('Filtro Proveedor', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
                                 decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
                                 child: DropdownButtonHideUnderline(
                                   child: DropdownButton<String?>(
                                     isExpanded: true,
                                     dropdownColor: const Color(0xFF2C2C2C),
                                     value: provsDisponibles.contains(_filtroProveedorMision) ? _filtroProveedorMision : null,
-                                    hint: const Text('Filtro Proveedor', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                                    hint: const Text('Filtro Proveedor', style: TextStyle(fontSize: 12, color: Colors.white54)),
                                     items: [
-                                      const DropdownMenuItem(value: null, child: Text('Proveedor: Todos', style: TextStyle(fontSize: 11, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
-                                      ...provsDisponibles.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                                      const DropdownMenuItem(value: null, child: Text('Proveedor: Todos los Proveedores', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                      ...provsDisponibles.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
                                     ],
                                     onChanged: (v) => setState(() => _filtroProveedorMision = v),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              flex: 2,
-                              child: SelectorJerarquicoUbicacion(
+                              const SizedBox(height: 6),
+                              // RENGLÓN 3: UBICACIÓN / MUEBLE JERÁRQUICO (100% ANCHO)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 3),
+                                child: Text('Filtro Ubicación / Mueble (Desplegable por Nivel)', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              SelectorJerarquicoUbicacion(
                                 todasLasRutas: mueblesDisponibles,
                                 rutaSeleccionada: _filtroMuebleMision,
                                 permitirSeleccionParcial: true,
-                                textoRaizVacio: 'Mueble: Mostrar Todo',
+                                textoRaizVacio: '📍 Mueble: Mostrar Todo (PISO / BODEGA / DISPLAY)',
+                                conteoLotesPorRuta: conteoPorUbicacionMision,
                                 onRutaCambiada: (v) => setState(() => _filtroMuebleMision = v),
                               ),
-                            ),
-                            if (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null)
-                              IconButton(
-                                icon: const Icon(Icons.filter_alt_off, color: Colors.redAccent, size: 18),
-                                tooltip: 'Limpiar filtros',
-                                onPressed: () => setState(() {
-                                  _filtroProveedorMision = null;
-                                  _filtroMuebleMision = null;
-                                  _filtroTipoMision = null;
-                                }),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  if (hayFiltrosActivos) ...[
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.redAccent,
+                                          side: const BorderSide(color: Colors.redAccent),
+                                          padding: const EdgeInsets.symmetric(vertical: 6),
+                                        ),
+                                        icon: const Icon(Icons.filter_alt_off, size: 16),
+                                        label: const Text('Limpiar Filtros', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                        onPressed: () => setState(() {
+                                          _filtroProveedorMision = null;
+                                          _filtroMuebleMision = null;
+                                          _filtroTipoMision = null;
+                                          _anioFiltroHistMision = hoy.year;
+                                          _mesFiltroHistMision = hoy.month;
+                                          _semanaFiltroHistMision = null;
+                                        }),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                  ],
+                                  Expanded(
+                                    flex: 2,
+                                    child: InkWell(
+                                      onTap: () => setState(() => _filtrosOcultosMisiones = true),
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amber.withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                                        ),
+                                        child: const Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                            SizedBox(width: 4),
+                                            Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
                       Expanded(
                         child: lista.isEmpty
                             ? Center(
@@ -1355,22 +1644,25 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
                                     Text(
-                                      (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null)
+                                      hayFiltrosActivos
                                           ? 'No hay misiones que coincidan con este filtro.'
-                                          : (_verHistorial ? 'Aún no hay misiones en el historial.' : '¡Piso Limpio!\nSin misiones pendientes.'),
+                                          : (_verHistorial ? 'Aún no hay misiones en el historial de este periodo.' : '¡Piso Limpio!\nSin misiones pendientes.'),
                                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent),
                                       textAlign: TextAlign.center,
                                     ),
-                                    if (_filtroProveedorMision != null || _filtroMuebleMision != null || _filtroTipoMision != null) ...[
+                                    if (hayFiltrosActivos) ...[
                                       const SizedBox(height: 14),
                                       ElevatedButton.icon(
                                         style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
                                         icon: const Icon(Icons.filter_alt_off, size: 18),
-                                        label: const Text('ELIMINAR FILTROS', style: TextStyle(fontWeight: FontWeight.bold)),
+                                        label: const Text('MOSTRAR TODAS', style: TextStyle(fontWeight: FontWeight.bold)),
                                         onPressed: () => setState(() {
                                           _filtroProveedorMision = null;
                                           _filtroMuebleMision = null;
                                           _filtroTipoMision = null;
+                                          _anioFiltroHistMision = null;
+                                          _mesFiltroHistMision = null;
+                                          _semanaFiltroHistMision = null;
                                         }),
                                       ),
                                     ],
@@ -1378,26 +1670,26 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 ),
                               )
                             : ListView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: lista.length,
-                    itemBuilder: (context, i) {
-                      var docMision = lista[i];
-                      var m = docMision.data() as Map<String, dynamic>;
-                      int prioridad = _getPriority(m);
-                      int? cantidad = m['cantidad'] ?? m['descontado'];
-                      DateTime? cad = (m['fechaCaducidad'] as Timestamp?)?.toDate();
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                itemCount: lista.length,
+                                itemBuilder: (context, i) {
+                                  var docMision = lista[i];
+                                  var m = docMision.data() as Map<String, dynamic>;
+                                  int prioridad = _getPriority(m);
+                                  int? cantidad = m['cantidad'] ?? m['descontado'];
+                                  DateTime? cad = (m['fechaCaducidad'] as Timestamp?)?.toDate();
 
-                      Color borderColor = _verHistorial
-                          ? Colors.green
-                          : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : (prioridad == 4 ? Colors.blueAccent : Colors.purpleAccent))));
+                                  Color borderColor = _verHistorial
+                                      ? Colors.green
+                                      : (prioridad <= 1 ? Colors.redAccent : (prioridad == 2 ? Colors.pinkAccent : (prioridad == 3 ? Colors.orangeAccent : (prioridad == 4 ? Colors.blueAccent : Colors.purpleAccent))));
 
-                      return Card(
-                        color: Colors.white10,
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        clipBehavior: Clip.antiAlias,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: borderColor, width: 2)),
-                        child: Column(
-                          children: [
+                                  return Card(
+                                    color: Colors.white10,
+                                    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    clipBehavior: Clip.antiAlias,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: borderColor, width: 2)),
+                                    child: Column(
+                                      children: [
                             _buildHeader(prioridad, _verHistorial),
                             ListTile(
                               contentPadding: const EdgeInsets.all(12),
@@ -1408,6 +1700,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 children: [
                                   Text(m['descripcion'] ?? m['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                                   Text('SKU: ${m['sku'] ?? 'ND'} • Prov: ${m['nombreProveedor'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                                  Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(m)}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                                 ],
                               ),
                               subtitle: Column(

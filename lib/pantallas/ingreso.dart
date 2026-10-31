@@ -196,7 +196,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                     child: TextField(
                       controller: _fechaCtrl,
                       decoration: const InputDecoration(labelText: 'Fecha de Caducidad', hintText: 'Ej. 01.09.26 o 01/09/2026', filled: true, fillColor: Colors.black45, border: OutlineInputBorder()),
-                      keyboardType: TextInputType.datetime,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -238,7 +238,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                     child: ListTile(
                       leading: CircleAvatar(backgroundColor: Colors.amber, child: Text(item['cantidad'].toString(), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold))),
                       title: Text(item['descripcion'], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      subtitle: Text('SKU: ${item['sku']} • Vence: ${item['fechaRaw']}\nProv: ${item['nombreProveedor']}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                      subtitle: Text('SKU: ${item['sku']} • Vence: ${item['fechaRaw']}\nUPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(item)} • Prov: ${item['nombreProveedor']}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
                       trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: () => setState(() => _manifiesto.removeAt(i))),
                     ),
                   );

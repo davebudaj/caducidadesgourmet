@@ -24,7 +24,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String? _filtroRiesgoEspecial;
   String? _filtroTipoUbicacion;
   String? _filtroMueble;
+  int? _filtroAnio = DateTime.now().year;
   int? _filtroMes;
+  bool _filtroSobrestockIA = false;
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -42,6 +44,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   @override
   void initState() {
     super.initState();
+    JerarquiaUbicacionHelper.precargarCacheUpc();
     _inventarioStream = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').orderBy('fechaCaducidad').snapshots();
   }
 
@@ -59,8 +62,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     setState(() {
       _filtroRiesgoEspecial = riesgo;
       _filtroProveedor = null;
+      _filtroAnio = null;
       _filtroMes = null;
-      _filtroDescuadreSAP = false; 
+      _filtroDescuadreSAP = false;
+      _filtroSobrestockIA = false; 
       _filtroGrupo = null;
     });
   }
@@ -205,6 +210,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _infoRow("SKU", d['sku']),
+              _infoRow("UPC", JerarquiaUbicacionHelper.obtenerUpcVisual(d)),
               _infoRow("PROVEEDOR", d['nombreProveedor']),
               _infoRow("GRUPO", d['nombreGpoArticulos']),
               _infoRow("UBICACIÓN PISO", d['ubicacion']),
@@ -670,6 +676,210 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     html.Url.revokeObjectUrl(url);
   }
 
+  void _mostrarAuditorIASap(List<QueryDocumentSnapshot> todosDocs) {
+    Map<String, int> fisicoPorSku = {};
+    Map<String, int> pisoPorSku = {};
+    Map<String, int> bodegaPorSku = {};
+    Map<String, Map<String, dynamic>> muestraPorSku = {};
+
+    for (var doc in todosDocs) {
+      var d = doc.data() as Map<String, dynamic>;
+      String s = (d['sku'] ?? '').toString().trim();
+      if (s.isEmpty) continue;
+      int c = (d['cantidad'] ?? 0) as int;
+      String u = (d['ubicacion'] ?? '').toString().toUpperCase();
+      if (u == 'EN TRÁNSITO') continue;
+
+      fisicoPorSku[s] = (fisicoPorSku[s] ?? 0) + c;
+      if (u.contains('BODEGA')) {
+        bodegaPorSku[s] = (bodegaPorSku[s] ?? 0) + c;
+      } else {
+        pisoPorSku[s] = (pisoPorSku[s] ?? 0) + c;
+      }
+      muestraPorSku.putIfAbsent(s, () => d);
+    }
+
+    List<Map<String, dynamic>> estancadosEnBodega = [];
+    List<Map<String, dynamic>> mermaFantasma = [];
+    List<Map<String, dynamic>> sobrantesFisicos = [];
+
+    for (var entry in muestraPorSku.entries) {
+      String s = entry.key;
+      var d = entry.value;
+      int totalFis = fisicoPorSku[s] ?? 0;
+      int enPiso = pisoPorSku[s] ?? 0;
+      int enBod = bodegaPorSku[s] ?? 0;
+      int ohSap = int.tryParse((d['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
+      double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
+
+      if (enBod > 0 && enPiso == 0) {
+        estancadosEnBodega.add({
+          'sku': s,
+          'datos': d,
+          'enBodega': enBod,
+          'oh': ohSap,
+          'impacto': enBod * precio,
+        });
+      }
+
+      if (ohSap >= 0 && totalFis != ohSap) {
+        int diff = ohSap - totalFis;
+        if (diff > 0) {
+          mermaFantasma.add({
+            'sku': s,
+            'datos': d,
+            'fisico': totalFis,
+            'oh': ohSap,
+            'faltante': diff,
+            'impacto': diff * precio,
+          });
+        } else {
+          sobrantesFisicos.add({
+            'sku': s,
+            'datos': d,
+            'fisico': totalFis,
+            'oh': ohSap,
+            'sobrante': -diff,
+            'impacto': (-diff) * precio,
+          });
+        }
+      }
+    }
+
+    estancadosEnBodega.sort((a, b) => (b['impacto'] as double).compareTo(a['impacto'] as double));
+    mermaFantasma.sort((a, b) => (b['impacto'] as double).compareTo(a['impacto'] as double));
+    sobrantesFisicos.sort((a, b) => (b['impacto'] as double).compareTo(a['impacto'] as double));
+
+    int tabActiva = 0;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          List<Map<String, dynamic>> listaActual = tabActiva == 0
+              ? estancadosEnBodega
+              : (tabActiva == 1 ? mermaFantasma : sobrantesFisicos);
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.cyanAccent, width: 2)),
+            title: const Row(
+              children: [
+                Icon(Icons.policy, color: Colors.cyanAccent, size: 24),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('🕵️‍♂️ Auditor IA: SAP vs Piso y Bodega', style: TextStyle(color: Colors.cyanAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 410,
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: tabActiva == 0 ? Colors.pinkAccent.withOpacity(0.25) : Colors.white10,
+                            side: BorderSide(color: tabActiva == 0 ? Colors.pinkAccent : Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                          ),
+                          onPressed: () => setModalState(() => tabActiva = 0),
+                          child: Text('🚨 Bodega (${estancadosEnBodega.length})', style: TextStyle(color: tabActiva == 0 ? Colors.pinkAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: tabActiva == 1 ? Colors.orangeAccent.withOpacity(0.25) : Colors.white10,
+                            side: BorderSide(color: tabActiva == 1 ? Colors.orangeAccent : Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                          ),
+                          onPressed: () => setModalState(() => tabActiva = 1),
+                          child: Text('📉 Faltante (${mermaFantasma.length})', style: TextStyle(color: tabActiva == 1 ? Colors.orangeAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: tabActiva == 2 ? Colors.cyanAccent.withOpacity(0.25) : Colors.white10,
+                            side: BorderSide(color: tabActiva == 2 ? Colors.cyanAccent : Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                          ),
+                          onPressed: () => setModalState(() => tabActiva = 2),
+                          child: Text('📦 Sobrante (${sobrantesFisicos.length})', style: TextStyle(color: tabActiva == 2 ? Colors.cyanAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    tabActiva == 0
+                        ? 'Productos guardados en BODEGA con 0 piezas exhibidas en PISO (Toca uno para filtrarlo):'
+                        : (tabActiva == 1
+                            ? 'Merma Fantasma: SAP reporta más piezas (OH) de las que hay mapeadas en tienda:'
+                            : 'Sobrante Físico: Hay más piezas mapeadas en tienda que el OH teórico de SAP:'),
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: listaActual.isEmpty
+                        ? const Center(child: Text('¡Sin hallazgos en esta categoría!', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)))
+                        : ListView.builder(
+                            itemCount: listaActual.length,
+                            itemBuilder: (c, idx) {
+                              var item = listaActual[idx];
+                              var d = item['datos'] as Map<String, dynamic>;
+                              String s = item['sku'].toString();
+                              return Card(
+                                color: Colors.white10,
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                child: ListTile(
+                                  dense: true,
+                                  title: Text(d['descripcion'] ?? s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white)),
+                                  subtitle: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('SKU: $s • UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}', style: const TextStyle(color: Colors.greenAccent, fontSize: 10)),
+                                      if (tabActiva == 0)
+                                        Text('📦 En Bodega: ${item['enBodega']} pzas • En Piso: 0 pzas (Ubicación: ${d['ubicacion']})', style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.bold))
+                                      else if (tabActiva == 1)
+                                        Text('📊 SAP OH: ${item['oh']} pzas vs Físico: ${item['fisico']} pzas (Faltan ${item['faltante']} pzas • MXN ${(item['impacto'] as double).toStringAsFixed(2)})', style: const TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold))
+                                      else
+                                        Text('📊 Físico: ${item['fisico']} pzas vs SAP OH: ${item['oh']} pzas (Sobran ${item['sobrante']} pzas)', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  trailing: const Icon(Icons.search, color: Colors.amber, size: 18),
+                                  onTap: () {
+                                    Navigator.pop(ctx);
+                                    _busquedaController.text = s;
+                                    setState(() {
+                                      _busqueda = s.toLowerCase();
+                                      _filtroAnio = null;
+                                      _filtroMes = null;
+                                    });
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CERRAR', style: TextStyle(color: Colors.white54))),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _descargarProximoMes(List<QueryDocumentSnapshot> todosLosDocs) {
     DateTime hoy = DateTime.now();
     int mesSig = hoy.month == 12 ? 1 : hoy.month + 1;
@@ -745,11 +955,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
             int dias = cad.difference(DateTime.now()).inDays;
 
-            bool coincideBusqueda = _busqueda.isEmpty ||
-                JerarquiaUbicacionHelper.coincideBusquedaInteligente(
-                  _busqueda,
-                  [data['descripcion']?.toString(), data['sku']?.toString(), data['ean']?.toString(), data['ubicacion']?.toString()],
-                );
+            bool coincideBusqueda = _busqueda.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busqueda, data);
             bool coincideProv = _filtroProveedor == null || prov == _filtroProveedor;
             bool coincideGpo = _filtroGrupo == null || gpo == _filtroGrupo;
             
@@ -766,7 +972,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 : [];
             bool coincideTipoUbi = true;
             bool coincideMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(ubi, prefijoUbi);
+            bool coincideAnio = _filtroAnio == null || cad.year == _filtroAnio;
             bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
+            bool coincideSobrestock = !_filtroSobrestockIA || JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(data) != null;
             bool coincideDescuadre = true;
             if (_filtroDescuadreSAP) {
               String skuRaw = (data['sku'] ?? '').toString();
@@ -774,7 +982,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               int ohSap = int.tryParse((data['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
               coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
             }
-            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideMes && coincideDescuadre;
+            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideAnio && coincideMes && coincideSobrestock && coincideDescuadre;
           }).toList();
 
           var docsFinales = docsFiltrados.take(100).toList();
@@ -830,8 +1038,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                _filtroRiesgoEspecial = null;
       _filtroTipoUbicacion = null;
       _filtroMueble = null;
+      _filtroAnio = DateTime.now().year;
       _filtroMes = null;
       _filtroDescuadreSAP = false;
+      _filtroSobrestockIA = false;
                              });
                           }
                         ),
@@ -860,13 +1070,39 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             if (_filtroDescuadreSAP) _filtroMes = null;
                           }),
                         ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _filtroSobrestockIA ? Colors.deepOrangeAccent : Colors.white10,
+                            foregroundColor: Colors.white,
+                            side: BorderSide(color: _filtroSobrestockIA ? Colors.amberAccent : Colors.deepOrangeAccent),
+                          ),
+                          icon: const Icon(Icons.psychology, size: 16),
+                          label: Text(_filtroSobrestockIA ? 'Viendo Sobrestock IA' : '🧠 Sobrestock IA', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onPressed: () => setState(() {
+                            _filtroSobrestockIA = !_filtroSobrestockIA;
+                            if (_filtroSobrestockIA) {
+                              _filtroAnio = null;
+                              _filtroMes = null;
+                            }
+                          }),
+                        ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.cyanAccent.withOpacity(0.18),
+                            foregroundColor: Colors.cyanAccent,
+                            side: const BorderSide(color: Colors.cyanAccent),
+                          ),
+                          icon: const Icon(Icons.policy, size: 16),
+                          label: const Text('🕵️‍♂️ Auditor IA SAP', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onPressed: () => _mostrarAuditorIASap(snapshot.data!.docs),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 10),
                     TextField(
                       controller: _busquedaController,
                       decoration: InputDecoration(
-                        hintText: 'Buscar SKU, UPC o Artículo...',
+                        hintText: '💬 Buscar SKU, UPC o frase IA (ej. "toyo bodega enero", "< 20 dias")...',
                         prefixIcon: const Icon(Icons.search, color: Colors.amber),
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
@@ -952,6 +1188,60 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                       ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
                                     ],
                                     onChanged: (v) => setState(() => _filtroGrupo = v),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro Año', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              Container(
+                                height: 40,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<int?>(
+                                    isExpanded: true,
+                                    dropdownColor: const Color(0xFF2C2C2C),
+                                    value: _filtroAnio,
+                                    hint: const Text('Filtro Año', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                    items: [
+                                      const DropdownMenuItem<int?>(
+                                        value: null,
+                                        child: Text('Año: Todos los años', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                      ),
+                                      ...({
+                                        DateTime.now().year - 1,
+                                        DateTime.now().year,
+                                        DateTime.now().year + 1,
+                                        DateTime.now().year + 2,
+                                        DateTime.now().year + 3,
+                                        ...snapshot.data!.docs
+                                            .map((doc) => ((doc.data() as Map)['fechaCaducidad'] as Timestamp?)?.toDate().year)
+                                            .whereType<int>(),
+                                      }.toList()
+                                            ..sort())
+                                          .map((anio) => DropdownMenuItem<int?>(
+                                                value: anio,
+                                                child: Text(
+                                                  anio == DateTime.now().year ? '📅 Año: $anio (En curso)' : '📅 Año: $anio',
+                                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                                ),
+                                              )),
+                                    ],
+                                    onChanged: (v) => setState(() => _filtroAnio = v),
                                   ),
                                 ),
                               ),
@@ -1107,6 +1397,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text('${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    if (JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d) != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d)!['detalle'].toString(),
+                                          style: const TextStyle(color: Colors.deepOrangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
                                     if (d['edicionTemporal'] == true)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),

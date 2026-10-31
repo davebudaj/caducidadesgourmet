@@ -1530,7 +1530,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             porDescontar -= descAqui;
 
             if (cantActual <= descAqui) await doc.reference.delete(); 
-            else await doc.reference.update({'cantidad': cantActual - descAqui});
+            else await doc.reference.update({'cantidad': cantActual - descAqui, 'ventaDiariaPromedio': ventasProcesadas[sku]});
 
             if (descAqui > 0) {
               var misionesP = await _refTienda.collection('misiones_auditoria')
@@ -1630,7 +1630,7 @@ class _PantallaAdminState extends State<PantallaAdmin> {
                             side: const BorderSide(color: Colors.cyanAccent),
                           ),
                           icon: const Icon(Icons.auto_fix_high, size: 18),
-                          label: const Text('REPARAR "ARTÍCULO NUEVO" (HACER MATCH CON BD)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                          label: const Text('REPARAR "ARTÍCULO NUEVO"', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                           onPressed: _repararArticulosNuevosConBD,
                         ),
                       ),
@@ -1688,35 +1688,51 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               const Divider(color: Colors.white24),
               const SizedBox(height: 20),
               
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Arquitectura de Ubicaciones (Árbol de Muebles)',
+                  style: TextStyle(fontSize: 16, color: Colors.amber, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Expanded(
-                    child: Text('Arquitectura de Ubicaciones (Árbol de Muebles)', style: TextStyle(fontSize: 16, color: Colors.amber, fontWeight: FontWeight.bold)),
-                  ),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueAccent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.print, size: 16),
+                      label: const Text('Imprimir QRs', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      onPressed: _abrirSelectorImpresionQRs,
                     ),
-                    icon: const Icon(Icons.print, size: 16),
-                    label: const Text('Imprimir QRs', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                    onPressed: _abrirSelectorImpresionQRs,
                   ),
-                  const SizedBox(width: 6),
-                  TextButton.icon(
-                    icon: Icon(_ramasContraidas.isEmpty ? Icons.unfold_less : Icons.unfold_more, color: Colors.cyanAccent, size: 16),
-                    label: Text(_ramasContraidas.isEmpty ? 'Contraer a 1er Nivel' : 'Expandir Todo', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                    onPressed: () {
-                      setState(() {
-                        if (_ramasContraidas.isNotEmpty) {
-                          _ramasContraidas.clear();
-                        } else {
-                          _ramasContraidas.addAll(_rutasConHijosActuales);
-                        }
-                      });
-                    },
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.cyanAccent,
+                        side: const BorderSide(color: Colors.cyanAccent),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                      icon: Icon(_ramasContraidas.isEmpty ? Icons.unfold_less : Icons.unfold_more, color: Colors.cyanAccent, size: 16),
+                      label: Text(
+                        _ramasContraidas.isEmpty ? 'Contraer a 1er Nivel' : 'Expandir Todo',
+                        style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          if (_ramasContraidas.isNotEmpty) {
+                            _ramasContraidas.clear();
+                          } else {
+                            _ramasContraidas.addAll(_rutasConHijosActuales);
+                          }
+                        });
+                      },
+                    ),
                   ),
                 ],
               ),
