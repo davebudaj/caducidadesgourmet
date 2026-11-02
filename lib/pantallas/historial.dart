@@ -17,6 +17,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   DateTimeRange? _rangoFechas;
   String? _grupoSeleccionado;
   bool _filtrosOcultos = false;
+  double _progresoScrollHistorial = 0.0;
 
   static const int kLimiteRegistrosMemoria = 100;
   static const int kDiasVentanaMaxima = 92; // ~3 meses
@@ -149,24 +150,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
             ],
           ),
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: TextButton.icon(
-              style: TextButton.styleFrom(
-                backgroundColor: Colors.amber.withOpacity(0.15),
-                foregroundColor: Colors.amber,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              ),
-              icon: Icon(_filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded, size: 18),
-              label: Text(
-                _filtrosOcultos ? 'Filtros' : 'Subir Filtros',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-              ),
-              onPressed: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
-            ),
-          ),
-        ],
+
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _historialStream,
@@ -265,28 +249,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          InkWell(
-                            onTap: () => setState(() => _filtrosOcultos = true),
-                            borderRadius: BorderRadius.circular(10),
-                            child: Container(
-                              width: double.infinity,
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.symmetric(vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.withOpacity(0.14),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.amber.withOpacity(0.45)),
-                              ),
-                              child: const Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                                  SizedBox(width: 4),
-                                  Text('^ Toca aquí o desliza hacia arriba para ocultar filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                            ),
-                          ),
+
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -498,14 +461,24 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
               Expanded(
                 child: docsFiltrados.isEmpty
                     ? const Center(child: Text('No hay tratamientos registrados en este periodo (Últimos 3 meses).', style: TextStyle(color: Colors.white54)))
-                    : NotificationListener(
-                        onNotification: (ScrollNotification scrollInfo) {
-                          if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
-                            setState(() => _filtrosOcultos = true);
-                          }
-                          return false;
-                        },
-                        child: ListView.builder(
+                    : Stack(
+                        children: [
+                          NotificationListener(
+                            onNotification: (ScrollNotification scrollInfo) {
+                              if (scrollInfo.metrics.axis == Axis.vertical) {
+                                if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
+                                  setState(() => _filtrosOcultos = true);
+                                }
+                                if (scrollInfo.metrics.maxScrollExtent > 0) {
+                                  double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
+                                  if ((p - _progresoScrollHistorial).abs() > 0.01) {
+                                    setState(() => _progresoScrollHistorial = p);
+                                  }
+                                }
+                              }
+                              return false;
+                            },
+                            child: ListView.builder(
                         itemCount: docsFiltrados.length,
                         itemBuilder: (context, index) {
                           var d = docsFiltrados[index].data() as Map<String, dynamic>;
@@ -542,6 +515,46 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                           );
                         },
                       ),
+                          ),
+                          Positioned(
+                            right: 1.5,
+                            top: 6,
+                            bottom: 6,
+                            width: 3.5,
+                            child: IgnorePointer(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  double trackH = constraints.maxHeight;
+                                  double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
+                                  double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
+                                  double thumbTop = maxTop * _progresoScrollHistorial.clamp(0.0, 1.0);
+                                  return Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Stack(
+                                      children: [
+                                        Positioned(
+                                          top: thumbTop,
+                                          left: 0,
+                                          right: 0,
+                                          height: thumbH,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.amber.withOpacity(0.65),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
               ),
             ],

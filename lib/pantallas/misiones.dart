@@ -20,6 +20,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   bool _actualizando = false;
   bool _verHistorial = false;
   bool _filtrosOcultosMisiones = false;
+  double _progresoScrollMisiones = 0.0;
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
   int? _filtroTipoMision;
@@ -1230,19 +1231,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
           ),
         ),
         actions: [
-          TextButton.icon(
-            style: TextButton.styleFrom(
-              backgroundColor: Colors.amber.withOpacity(0.15),
-              foregroundColor: Colors.amber,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            ),
-            icon: Icon(_filtrosOcultosMisiones ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded, size: 17),
-            label: Text(
-              _filtrosOcultosMisiones ? 'Filtros' : 'Subir',
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-            ),
-            onPressed: () => setState(() => _filtrosOcultosMisiones = !_filtrosOcultosMisiones),
-          ),
+
           IconButton(
             icon: _actualizando ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber)) : const Icon(Icons.refresh, color: Colors.amber),
             onPressed: _actualizando ? null : _generarMisionesAutomaticas,
@@ -1418,28 +1407,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  InkWell(
-                                    onTap: () => setState(() => _filtrosOcultosMisiones = true),
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: Container(
-                                      width: double.infinity,
-                                      margin: const EdgeInsets.only(bottom: 6),
-                                      padding: const EdgeInsets.symmetric(vertical: 5),
-                                      decoration: BoxDecoration(
-                                        color: Colors.amber.withOpacity(0.14),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: Colors.amber.withOpacity(0.45)),
-                                      ),
-                                      child: const Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                                          SizedBox(width: 4),
-                                          Text('^ Toca aquí o desliza hacia arriba para ocultar filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
+
                               if (_verHistorial) ...[
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1742,14 +1710,24 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                   ],
                                 ),
                               )
-                            : NotificationListener(
-                                onNotification: (ScrollNotification scrollInfo) {
-                                  if (!_filtrosOcultosMisiones && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
-                                    setState(() => _filtrosOcultosMisiones = true);
-                                  }
-                                  return false;
-                                },
-                                child: ListView.builder(
+                            : Stack(
+                                children: [
+                                  NotificationListener(
+                                    onNotification: (ScrollNotification scrollInfo) {
+                                      if (scrollInfo.metrics.axis == Axis.vertical) {
+                                        if (!_filtrosOcultosMisiones && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
+                                          setState(() => _filtrosOcultosMisiones = true);
+                                        }
+                                        if (scrollInfo.metrics.maxScrollExtent > 0) {
+                                          double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
+                                          if ((p - _progresoScrollMisiones).abs() > 0.01) {
+                                            setState(() => _progresoScrollMisiones = p);
+                                          }
+                                        }
+                                      }
+                                      return false;
+                                    },
+                                    child: ListView.builder(
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 itemCount: lista.length,
                                 itemBuilder: (context, i) {
@@ -1817,7 +1795,47 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       );
                     },
                   ),
-                ),
+                                  ),
+                                  Positioned(
+                                    right: 1.5,
+                                    top: 6,
+                                    bottom: 6,
+                                    width: 3.5,
+                                    child: IgnorePointer(
+                                      child: LayoutBuilder(
+                                        builder: (context, constraints) {
+                                          double trackH = constraints.maxHeight;
+                                          double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
+                                          double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
+                                          double thumbTop = maxTop * _progresoScrollMisiones.clamp(0.0, 1.0);
+                                          return Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withOpacity(0.08),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Stack(
+                                              children: [
+                                                Positioned(
+                                                  top: thumbTop,
+                                                  left: 0,
+                                                  right: 0,
+                                                  height: thumbH,
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.amber.withOpacity(0.65),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                 ),
               ],
             );

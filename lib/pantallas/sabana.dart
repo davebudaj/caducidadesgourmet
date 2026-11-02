@@ -27,6 +27,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   int? _filtroAnio = DateTime.now().year;
   int? _filtroMes;
   bool _filtroSobrestockIA = false;
+  int? _filtroCapturaAnio;
+  int? _filtroCapturaMes;
+  Set<int> _filtroCapturaDias = {};
+  double _progresoScrollSabana = 0.0;
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -64,6 +68,272 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     return limpio;
   }
 
+
+  String _formatearFechaCapturaLote(Map<String, dynamic> d) {
+    Timestamp? ts = d['fechaCaptura'] as Timestamp?;
+    if (ts == null) return 'Sin registro';
+    DateTime f = ts.toDate();
+    return "${f.day.toString().padLeft(2, '0')}/${f.month.toString().padLeft(2, '0')}/${f.year}";
+  }
+
+  String _textoBotonFiltroCaptura() {
+    if (_filtroCapturaAnio == null && _filtroCapturaMes == null && _filtroCapturaDias.isEmpty) {
+      return '📥 Fecha de Captura: Todas (Año / Mes / Días)';
+    }
+    List<String> partes = [];
+    if (_filtroCapturaAnio != null) partes.add('${_filtroCapturaAnio}');
+    if (_filtroCapturaMes != null) partes.add(_nombresMeses[_filtroCapturaMes] ?? 'Mes $_filtroCapturaMes');
+    if (_filtroCapturaDias.isNotEmpty) {
+      var diasOrd = _filtroCapturaDias.toList()..sort();
+      partes.add('Días: ${diasOrd.join(", ")}');
+    }
+    return '📥 Captura: ${partes.join(" • ")}';
+  }
+
+  void _abrirSelectorDinamicoFechaCaptura(List<QueryDocumentSnapshot> todosDocs) {
+    List<DateTime> fechasReales = [];
+    for (var doc in todosDocs) {
+      var d = doc.data() as Map<String, dynamic>;
+      Timestamp? ts = d['fechaCaptura'] as Timestamp?;
+      if (ts != null) {
+        fechasReales.add(ts.toDate());
+      }
+    }
+
+    List<int> aniosDisp = fechasReales.map((f) => f.year).toSet().toList()..sort((a, b) => b.compareTo(a));
+    if (aniosDisp.isEmpty) {
+      aniosDisp = [DateTime.now().year];
+    }
+
+    int? tempAnio = _filtroCapturaAnio;
+    int? tempMes = _filtroCapturaMes;
+    Set<int> tempDias = Set<int>.from(_filtroCapturaDias);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          List<DateTime> filtradasPorAnio = fechasReales.where((f) => tempAnio == null || f.year == tempAnio).toList();
+          List<int> mesesDisp = filtradasPorAnio.map((f) => f.month).toSet().toList()..sort();
+
+          List<DateTime> filtradasPorAnioYMes = filtradasPorAnio.where((f) => tempMes == null || f.month == tempMes).toList();
+          Map<int, int> lotesPorDia = {};
+          for (var f in filtradasPorAnioYMes) {
+            lotesPorDia[f.day] = (lotesPorDia[f.day] ?? 0) + 1;
+          }
+          List<int> diasDisponibles = lotesPorDia.keys.toList()..sort();
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.cyanAccent, width: 1.5)),
+            title: const Row(
+              children: [
+                Icon(Icons.event_available, color: Colors.cyanAccent, size: 22),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Filtrar por Fecha de Captura',
+                    style: TextStyle(color: Colors.cyanAccent, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 440,
+              height: 380,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Año de Captura', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Container(
+                              height: 38,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<int?>(
+                                  isExpanded: true,
+                                  dropdownColor: const Color(0xFF2C2C2C),
+                                  value: aniosDisp.contains(tempAnio) ? tempAnio : null,
+                                  items: [
+                                    const DropdownMenuItem<int?>(
+                                      value: null,
+                                      child: Text('Año: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                    ),
+                                    ...aniosDisp.map((a) => DropdownMenuItem<int?>(
+                                          value: a,
+                                          child: Text('📅 $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                        )),
+                                  ],
+                                  onChanged: (val) {
+                                    setModalState(() {
+                                      tempAnio = val;
+                                      tempDias.clear();
+                                    });
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Mes de Captura', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Container(
+                              height: 38,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<int?>(
+                                  isExpanded: true,
+                                  dropdownColor: const Color(0xFF2C2C2C),
+                                  value: mesesDisp.contains(tempMes) ? tempMes : null,
+                                  items: [
+                                    const DropdownMenuItem<int?>(
+                                      value: null,
+                                      child: Text('Mes: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                    ),
+                                    ...mesesDisp.map((m) => DropdownMenuItem<int?>(
+                                          value: m,
+                                          child: Text(_nombresMeses[m] ?? 'Mes $m', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                        )),
+                                  ],
+                                  onChanged: (val) {
+                                    setModalState(() {
+                                      tempMes = val;
+                                      tempDias.clear();
+                                    });
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Días con Capturas (Selección múltiple):',
+                        style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      Row(
+                        children: [
+                          TextButton(
+                            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                            onPressed: () => setModalState(() => tempDias.addAll(diasDisponibles)),
+                            child: const Text('Todos', style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                          const SizedBox(width: 6),
+                          TextButton(
+                            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                            onPressed: () => setModalState(() => tempDias.clear()),
+                            child: const Text('Limpiar', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const Divider(color: Colors.white24, height: 10),
+                  Expanded(
+                    child: diasDisponibles.isEmpty
+                        ? const Center(
+                            child: Text('No hay fechas de captura registradas en este periodo.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                          )
+                        : ListView.builder(
+                            itemCount: diasDisponibles.length,
+                            itemBuilder: (c, idx) {
+                              int dia = diasDisponibles[idx];
+                              int cantLotes = lotesPorDia[dia] ?? 0;
+                              bool marcado = tempDias.contains(dia);
+                              return Card(
+                                color: marcado ? Colors.cyanAccent.withOpacity(0.18) : Colors.white10,
+                                margin: const EdgeInsets.symmetric(vertical: 3),
+                                child: CheckboxListTile(
+                                  dense: true,
+                                  visualDensity: VisualDensity.compact,
+                                  activeColor: Colors.cyanAccent,
+                                  checkColor: Colors.black,
+                                  value: marcado,
+                                  title: Text(
+                                    '📅 Día ${dia.toString().padLeft(2, '0')}',
+                                    style: TextStyle(
+                                      color: marcado ? Colors.cyanAccent : Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    '$cantLotes lote(s) capturado(s)',
+                                    style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
+                                  ),
+                                  onChanged: (v) {
+                                    setModalState(() {
+                                      if (v == true) {
+                                        tempDias.add(dia);
+                                      } else {
+                                        tempDias.remove(dia);
+                                      }
+                                    });
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _filtroCapturaAnio = null;
+                    _filtroCapturaMes = null;
+                    _filtroCapturaDias.clear();
+                  });
+                  Navigator.pop(ctx);
+                },
+                child: const Text('LIMPIAR TODO', style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('CANCELAR', style: TextStyle(color: Colors.white54, fontSize: 11)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
+                icon: const Icon(Icons.check, size: 16),
+                label: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                onPressed: () {
+                  setState(() {
+                    _filtroCapturaAnio = tempAnio;
+                    _filtroCapturaMes = tempMes;
+                    _filtroCapturaDias = tempDias;
+                  });
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void aplicarFiltroEspecial(String riesgo) {
     setState(() {
       _filtroRiesgoEspecial = riesgo;
@@ -71,7 +341,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       _filtroAnio = null;
       _filtroMes = null;
       _filtroDescuadreSAP = false;
-      _filtroSobrestockIA = false; 
+      _filtroSobrestockIA = false;
+      _filtroCapturaAnio = null;
+      _filtroCapturaMes = null;
+      _filtroCapturaDias.clear(); 
       _filtroGrupo = null;
     });
   }
@@ -223,6 +496,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               _infoRow("CANTIDAD FÍSICA", d['cantidad'].toString() + " pzas"),
               _infoRow("PRECIO VENTA", "MXN " + (d['precioVenta'] ?? 0).toString()),
               _infoRow("OH TEÓRICO (SAP)", (d['oh'] ?? 'No disponible').toString() + " pzas"),
+              _infoRow("FECHA CAPTURA", _formatearFechaCapturaLote(d)),
               _infoRow("CADUCIDAD", "${cad.day}/${cad.month}/${cad.year}"),
               const SizedBox(height: 15),
               SizedBox(
@@ -923,37 +1197,23 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           : AppBar(
               title: InkWell(
                 onTap: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('Sábana de Riesgo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(width: 6),
-                    Icon(
-                      _filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
-                      color: Colors.amber,
-                      size: 22,
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 8.0),
-                  child: TextButton.icon(
-                    style: TextButton.styleFrom(
-                      backgroundColor: Colors.amber.withOpacity(0.15),
-                      foregroundColor: Colors.amber,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    ),
-                    icon: Icon(_filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded, size: 18),
-                    label: Text(
-                      _filtrosOcultos ? 'Filtros' : 'Subir Filtros',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                    ),
-                    onPressed: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Sábana de Riesgo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      const SizedBox(width: 6),
+                      Icon(
+                        _filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                        color: Colors.amber,
+                        size: 22,
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _inventarioStream,
@@ -1015,6 +1275,18 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             bool coincideAnio = _filtroAnio == null || cad.year == _filtroAnio;
             bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
             bool coincideSobrestock = !_filtroSobrestockIA || JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(data) != null;
+            bool coincideFechaCaptura = true;
+            if (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty) {
+              Timestamp? tsCap = data['fechaCaptura'] as Timestamp?;
+              if (tsCap == null) {
+                coincideFechaCaptura = false;
+              } else {
+                DateTime fCap = tsCap.toDate();
+                if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) coincideFechaCaptura = false;
+                if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) coincideFechaCaptura = false;
+                if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) coincideFechaCaptura = false;
+              }
+            }
             bool coincideDescuadre = true;
             if (_filtroDescuadreSAP) {
               String skuRaw = (data['sku'] ?? '').toString();
@@ -1022,7 +1294,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               int ohSap = int.tryParse((data['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
               coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
             }
-            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideAnio && coincideMes && coincideSobrestock && coincideDescuadre;
+            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideAnio && coincideMes && coincideFechaCaptura && coincideSobrestock && coincideDescuadre;
           }).toList();
 
           var docsFinales = docsFiltrados.take(100).toList();
@@ -1071,28 +1343,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     child: SingleChildScrollView(
                       child: Column(
                         children: [
-                          InkWell(
-                            onTap: () => setState(() => _filtrosOcultos = true),
-                            borderRadius: BorderRadius.circular(10),
-                            child: Container(
-                              width: double.infinity,
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.symmetric(vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.withOpacity(0.14),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.amber.withOpacity(0.45)),
-                              ),
-                              child: const Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                                  SizedBox(width: 4),
-                                  Text('^ Toca aquí o desliza hacia arriba para ocultar filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                            ),
-                          ),
+
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -1115,6 +1366,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       _filtroMes = null;
       _filtroDescuadreSAP = false;
       _filtroSobrestockIA = false;
+      _filtroCapturaAnio = null;
+      _filtroCapturaMes = null;
+      _filtroCapturaDias.clear();
                              });
                           }
                         ),
@@ -1369,6 +1623,54 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       children: [
                         const Padding(
                           padding: EdgeInsets.only(left: 4, bottom: 4),
+                          child: Text('Filtro por Fecha de Captura (Año / Mes / Días)', style: TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 40,
+                                child: OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty)
+                                        ? Colors.black
+                                        : Colors.cyanAccent,
+                                    backgroundColor: (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty)
+                                        ? Colors.cyanAccent
+                                        : Colors.white10,
+                                    side: const BorderSide(color: Colors.cyanAccent),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  icon: const Icon(Icons.event_available, size: 17),
+                                  label: Text(
+                                    _textoBotonFiltroCaptura(),
+                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  onPressed: () => _abrirSelectorDinamicoFechaCaptura(snapshot.data!.docs),
+                                ),
+                              ),
+                            ),
+                            if (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.close, color: Colors.redAccent, size: 20),
+                                tooltip: 'Quitar filtro de fecha de captura',
+                                onPressed: () => setState(() {
+                                  _filtroCapturaAnio = null;
+                                  _filtroCapturaMes = null;
+                                  _filtroCapturaDias.clear();
+                                }),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4, bottom: 4),
                           child: Text('Filtro Ubicación (Desplegable por Nivel)', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
                         ),
                         SelectorJerarquicoUbicacion(
@@ -1414,14 +1716,24 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               Expanded(
                 child: docsFinales.isEmpty
                     ? const Center(child: Text('No hay productos que coincidan.', style: TextStyle(color: Colors.white54)))
-                    : NotificationListener(
-                        onNotification: ( ScrollNotification scrollInfo) {
-                          if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
-                            setState(() => _filtrosOcultos = true);
-                          }
-                          return false;
-                        },
-                        child: ListView.builder(
+                    : Stack(
+                        children: [
+                          NotificationListener(
+                            onNotification: (ScrollNotification scrollInfo) {
+                              if (scrollInfo.metrics.axis == Axis.vertical) {
+                                if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
+                                  setState(() => _filtrosOcultos = true);
+                                }
+                                if (scrollInfo.metrics.maxScrollExtent > 0) {
+                                  double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
+                                  if ((p - _progresoScrollSabana).abs() > 0.01) {
+                                    setState(() => _progresoScrollSabana = p);
+                                  }
+                                }
+                              }
+                              return false;
+                            },
+                            child: ListView.builder(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         itemCount: docsFinales.length,
                         itemBuilder: (context, i) {
@@ -1479,6 +1791,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text('${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '📥 Capturado: ${_formatearFechaCapturaLote(d)}  •  📅 Cad: ${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                                    ),
                                     if (JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d) != null)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),
@@ -1532,6 +1849,46 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                           );
                         },
                       ),
+                          ),
+                          Positioned(
+                            right: 1.5,
+                            top: 6,
+                            bottom: 6,
+                            width: 3.5,
+                            child: IgnorePointer(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  double trackH = constraints.maxHeight;
+                                  double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
+                                  double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
+                                  double thumbTop = maxTop * _progresoScrollSabana.clamp(0.0, 1.0);
+                                  return Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Stack(
+                                      children: [
+                                        Positioned(
+                                          top: thumbTop,
+                                          left: 0,
+                                          right: 0,
+                                          height: thumbH,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.amber.withOpacity(0.65),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
               ),
             ],
