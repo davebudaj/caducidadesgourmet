@@ -42,6 +42,12 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   late Stream<QuerySnapshot> _inventarioStream; 
 
   @override
+  void dispose() {
+    _busquedaController.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     JerarquiaUbicacionHelper.precargarCacheUpc();
@@ -914,7 +920,41 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 IconButton(icon: const Icon(Icons.delete_forever), tooltip: 'Borrar Lotes', onPressed: _borrarSeleccionados),
               ],
             )
-          : AppBar(title: const Text('Sábana de Riesgo', style: TextStyle(fontWeight: FontWeight.bold))),
+          : AppBar(
+              title: InkWell(
+                onTap: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Sábana de Riesgo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(width: 6),
+                    Icon(
+                      _filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                      color: Colors.amber,
+                      size: 22,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.amber.withOpacity(0.15),
+                      foregroundColor: Colors.amber,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    ),
+                    icon: Icon(_filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded, size: 18),
+                    label: Text(
+                      _filtrosOcultos ? 'Filtros' : 'Subir Filtros',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                    onPressed: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
+                  ),
+                ),
+              ],
+            ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _inventarioStream,
         builder: (context, snapshot) {
@@ -1015,11 +1055,44 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                   ),
                 )
               else
-                Container(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                  decoration: const BoxDecoration(color: Colors.black, border: Border(bottom: BorderSide(color: Colors.white24, width: 1))),
-                  child: Column(
-                    children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onVerticalDragEnd: (details) {
+                    if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
+                      setState(() => _filtrosOcultos = true);
+                    }
+                  },
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.44,
+                    ),
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                    decoration: const BoxDecoration(color: Colors.black, border: Border(bottom: BorderSide(color: Colors.white24, width: 1))),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          InkWell(
+                            onTap: () => setState(() => _filtrosOcultos = true),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.amber.withOpacity(0.45)),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                  SizedBox(width: 4),
+                                  Text('^ Toca aquí o desliza hacia arriba para ocultar filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -1333,13 +1406,22 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         ),
                       ),
                     ),
-                  ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-              ),
               Expanded(
                 child: docsFinales.isEmpty
                     ? const Center(child: Text('No hay productos que coincidan.', style: TextStyle(color: Colors.white54)))
-                    : ListView.builder(
+                    : NotificationListener(
+                        onNotification: ( ScrollNotification scrollInfo) {
+                          if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
+                            setState(() => _filtrosOcultos = true);
+                          }
+                          return false;
+                        },
+                        child: ListView.builder(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         itemCount: docsFinales.length,
                         itemBuilder: (context, i) {
@@ -1449,6 +1531,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             ),
                           );
                         },
+                      ),
                       ),
               ),
             ],

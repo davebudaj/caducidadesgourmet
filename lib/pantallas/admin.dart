@@ -43,6 +43,14 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   List<String> _rutasConHijosActuales = [];
 
   @override
+  void dispose() {
+    _muebleController.dispose();
+    _numEmpleadoController.dispose();
+    _nombreUsuarioController.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);

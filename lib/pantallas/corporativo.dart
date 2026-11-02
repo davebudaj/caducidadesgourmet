@@ -44,9 +44,12 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
     "MANDAR EVIDENCIA FOTOGRÁFICA"
   ];
 
+  late Stream<QuerySnapshot> _corpStream;
+
   @override
   void initState() {
     super.initState();
+    _corpStream = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').snapshots();
     JerarquiaUbicacionHelper.precargarCacheUpc();
   }
 
@@ -320,7 +323,7 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').snapshots(),
+      stream: _corpStream,
       builder: (context, snapshot) {
         var docsFiltrados = <QueryDocumentSnapshot>[];
         if (snapshot.hasData) {

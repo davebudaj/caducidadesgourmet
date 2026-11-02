@@ -37,10 +37,19 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
     9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
   };
 
+  late Stream<QuerySnapshot> _misionesStream;
+
   @override
   void initState() {
     super.initState();
+    _misionesStream = _refMisiones.snapshots();
     JerarquiaUbicacionHelper.precargarCacheUpc();
+  }
+
+  @override
+  void dispose() {
+    _busquedaMisionCtrl.dispose();
+    super.dispose();
   }
 
   int _calcularSemanaMision(DateTime fecha) {
@@ -1203,8 +1212,37 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Misiones de Auditoría', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        title: InkWell(
+          onTap: () => setState(() => _filtrosOcultosMisiones = !_filtrosOcultosMisiones),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Flexible(
+                child: Text('Misiones de Auditoría', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15), overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                _filtrosOcultosMisiones ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                color: Colors.amber,
+                size: 22,
+              ),
+            ],
+          ),
+        ),
         actions: [
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.amber.withOpacity(0.15),
+              foregroundColor: Colors.amber,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            ),
+            icon: Icon(_filtrosOcultosMisiones ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded, size: 17),
+            label: Text(
+              _filtrosOcultosMisiones ? 'Filtros' : 'Subir',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+            onPressed: () => setState(() => _filtrosOcultosMisiones = !_filtrosOcultosMisiones),
+          ),
           IconButton(
             icon: _actualizando ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber)) : const Icon(Icons.refresh, color: Colors.amber),
             onPressed: _actualizando ? null : _generarMisionesAutomaticas,
@@ -1250,7 +1288,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
               color: Colors.amber,
               onRefresh: _generarMisionesAutomaticas,
               child: StreamBuilder<QuerySnapshot>(
-                stream: _refMisiones.snapshots(),
+                stream: _misionesStream,
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
 
@@ -1363,12 +1401,45 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                           ),
                         )
                       else
-                        Container(
-                          color: Colors.black,
-                          padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
+                        GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onVerticalDragEnd: (details) {
+                            if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
+                              setState(() => _filtrosOcultosMisiones = true);
+                            }
+                          },
+                          child: Container(
+                            constraints: BoxConstraints(
+                              maxHeight: MediaQuery.of(context).size.height * 0.42,
+                            ),
+                            color: Colors.black,
+                            padding: const EdgeInsets.fromLTRB(14, 2, 14, 6),
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  InkWell(
+                                    onTap: () => setState(() => _filtrosOcultosMisiones = true),
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: Container(
+                                      width: double.infinity,
+                                      margin: const EdgeInsets.only(bottom: 6),
+                                      padding: const EdgeInsets.symmetric(vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.amber.withOpacity(0.14),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.amber.withOpacity(0.45)),
+                                      ),
+                                      child: const Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                          SizedBox(width: 4),
+                                          Text('^ Toca aquí o desliza hacia arriba para ocultar filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                               if (_verHistorial) ...[
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1634,7 +1705,9 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                   ),
                                 ],
                               ),
-                            ],
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       Expanded(
@@ -1669,7 +1742,14 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                   ],
                                 ),
                               )
-                            : ListView.builder(
+                            : NotificationListener(
+                                onNotification: (ScrollNotification scrollInfo) {
+                                  if (!_filtrosOcultosMisiones && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
+                                    setState(() => _filtrosOcultosMisiones = true);
+                                  }
+                                  return false;
+                                },
+                                child: ListView.builder(
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 itemCount: lista.length,
                                 itemBuilder: (context, i) {
@@ -1737,6 +1817,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       );
                     },
                   ),
+                ),
                 ),
               ],
             );

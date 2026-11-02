@@ -27,9 +27,18 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
   };
 
+  late Stream<QuerySnapshot> _historialStream;
+
   @override
   void initState() {
     super.initState();
+    _historialStream = FirebaseFirestore.instance
+        .collection('tiendas')
+        .doc(widget.idTiendaGlobal)
+        .collection('historial_tratamientos')
+        .orderBy('fechaTratamiento', descending: true)
+        .limit(200)
+        .snapshots();
     JerarquiaUbicacionHelper.precargarCacheUpc();
   }
 
@@ -122,15 +131,45 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     List<int> aniosDisponibles = {hoy.year, fechaCorte3Meses.year}.toList()..sort((a, b) => b.compareTo(a));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Historial de Tratamientos', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+      appBar: AppBar(
+        title: InkWell(
+          onTap: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Flexible(
+                child: Text('Historial de Tratamientos', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15), overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                _filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                color: Colors.amber,
+                size: 22,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: TextButton.icon(
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.amber.withOpacity(0.15),
+                foregroundColor: Colors.amber,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              ),
+              icon: Icon(_filtrosOcultos ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded, size: 18),
+              label: Text(
+                _filtrosOcultos ? 'Filtros' : 'Subir Filtros',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+              ),
+              onPressed: () => setState(() => _filtrosOcultos = !_filtrosOcultos),
+            ),
+          ),
+        ],
+      ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('tiendas')
-            .doc(widget.idTiendaGlobal)
-            .collection('historial_tratamientos')
-            .orderBy('fechaTratamiento', descending: true)
-            .limit(200)
-            .snapshots(),
+        stream: _historialStream,
         builder: (context, snapshot) {
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
@@ -206,15 +245,48 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                   ),
                 )
               else
-                Container(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                  decoration: const BoxDecoration(
-                    color: Colors.black,
-                    border: Border(bottom: BorderSide(color: Colors.white24, width: 1)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onVerticalDragEnd: (details) {
+                    if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
+                      setState(() => _filtrosOcultos = true);
+                    }
+                  },
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.44,
+                    ),
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                    decoration: const BoxDecoration(
+                      color: Colors.black,
+                      border: Border(bottom: BorderSide(color: Colors.white24, width: 1)),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          InkWell(
+                            onTap: () => setState(() => _filtrosOcultos = true),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.amber.withOpacity(0.45)),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                  SizedBox(width: 4),
+                                  Text('^ Toca aquí o desliza hacia arriba para ocultar filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -418,13 +490,22 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                           ),
                         ),
                       ),
-                    ],
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               Expanded(
                 child: docsFiltrados.isEmpty
                     ? const Center(child: Text('No hay tratamientos registrados en este periodo (Últimos 3 meses).', style: TextStyle(color: Colors.white54)))
-                    : ListView.builder(
+                    : NotificationListener(
+                        onNotification: (ScrollNotification scrollInfo) {
+                          if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
+                            setState(() => _filtrosOcultos = true);
+                          }
+                          return false;
+                        },
+                        child: ListView.builder(
                         itemCount: docsFiltrados.length,
                         itemBuilder: (context, index) {
                           var d = docsFiltrados[index].data() as Map<String, dynamic>;
@@ -460,6 +541,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                             ),
                           );
                         },
+                      ),
                       ),
               ),
             ],
