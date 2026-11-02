@@ -1347,7 +1347,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
 
             bool coincideAnio = _filtroAnio == null || cad.year == _filtroAnio;
             bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
-            bool coincideVentana3Meses = !filtroAnioEnCursoActivo || (dias <= kDiasVentanaTresMeses);
+            bool coincideVentana3Meses = true;
 
             return coincideBusqueda &&
                 coincideProv &&
@@ -1361,9 +1361,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 coincideDescuadre;
           }).toList();
 
-          int limiteActual = filtroAnioEnCursoActivo ? _limiteLotesMostrados : 100;
+          int limiteActual = _limiteLotesMostrados;
           var docsFinales = docsFiltrados.take(limiteActual).toList();
-          bool mostrarPestanaCargar50Mas = filtroAnioEnCursoActivo && docsFiltrados.length > _limiteLotesMostrados;
+          bool mostrarPestanaCargar50Mas = docsFiltrados.length > _limiteLotesMostrados;
 
           return Column(
             children: [
@@ -1650,7 +1650,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                                 .map((anio) => DropdownMenuItem<int?>(
                                                       value: anio,
                                                       child: Text(
-                                                        anio == DateTime.now().year ? 'Año: $anio (En curso • Próx. 3 meses)' : 'Año: $anio',
+                                                        anio == DateTime.now().year ? 'Año: $anio (En curso)' : 'Año: $anio',
                                                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                                                       ),
                                                     )),
@@ -1691,7 +1691,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                           items: [
                                             const DropdownMenuItem<int?>(
                                               value: null,
-                                              child: Text('Mes: Todos (Top 50 a 3 meses)', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                              child: Text('Mes: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                                             ),
                                             ..._nombresMeses.entries.map((e) => DropdownMenuItem<int?>(
                                                   value: e.key,
@@ -1853,7 +1853,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                               });
                                             },
                                             child: Text(
-                                              'Cargar $loteSiguiente lotes más (Mostrando ${docsFinales.length} de ${docsFiltrados.length} en próx. 3 meses)',
+                                              'Cargar $loteSiguiente lotes más (Mostrando ${docsFinales.length} de ${docsFiltrados.length} lotes)',
                                               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                                               textAlign: TextAlign.center,
                                             ),
