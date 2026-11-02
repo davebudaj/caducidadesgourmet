@@ -10,17 +10,16 @@ class PantallaHistorial extends StatefulWidget {
 }
 
 class _PantallaHistorialState extends State<PantallaHistorial> {
-  // Por defecto inicia en el Año y Mes en curso y limita a los últimos 3 meses para proteger la memoria
   int? _anioFiltro = DateTime.now().year;
   int? _mesFiltro = DateTime.now().month;
-  int? _semanaFiltro; // 1..5
+  int? _semanaFiltro;
   DateTimeRange? _rangoFechas;
   String? _grupoSeleccionado;
   bool _filtrosOcultos = false;
-  double _progresoScrollHistorial = 0.0;
+  final ValueNotifier<double> _progresoScrollHistorial = ValueNotifier<double>(0.0);
 
   static const int kLimiteRegistrosMemoria = 100;
-  static const int kDiasVentanaMaxima = 92; // ~3 meses
+  static const int kDiasVentanaMaxima = 92;
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
@@ -29,6 +28,12 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   };
 
   late Stream<QuerySnapshot> _historialStream;
+
+  @override
+  void dispose() {
+    _progresoScrollHistorial.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -126,6 +131,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
 
   @override
   Widget build(BuildContext context) {
+    final bool esZebra = JerarquiaUbicacionHelper.esDispositivoZebra;
     DateTime hoy = DateTime.now();
     DateTime fechaCorte3Meses = hoy.subtract(const Duration(days: kDiasVentanaMaxima));
     int anioActual = hoy.year;
@@ -150,7 +156,6 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
             ],
           ),
         ),
-
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _historialStream,
@@ -159,7 +164,6 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text('Aún no hay tratamientos registrados.'));
 
-          // Filtrar primero por ventana de 3 meses para no saturar la memoria RAM
           var docsRecientes3Meses = snapshot.data!.docs.where((doc) {
             var d = doc.data() as Map<String, dynamic>;
             Timestamp? ts = d['fechaTratamiento'];
@@ -249,210 +253,209 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            '⚡ Ventana activa: Últimos 3 meses (Máx. 100 registros)',
-                            style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                          ),
-                          if (_rangoFechas != null || _semanaFiltro != null || _grupoSeleccionado != null || _mesFiltro != hoy.month || _anioFiltro != anioActual)
-                            TextButton.icon(
-                              style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                minimumSize: Size.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              icon: const Icon(Icons.refresh, color: Colors.amberAccent, size: 15),
-                              label: const Text('Restaurar Mes Actual', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                              onPressed: () => setState(() {
-                                _rangoFechas = null;
-                                _semanaFiltro = null;
-                                _grupoSeleccionado = null;
-                                _anioFiltro = hoy.year;
-                                _mesFiltro = hoy.month;
-                              }),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(left: 4, bottom: 3),
-                                  child: Text('Filtro Año', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
-                                ),
-                                Container(
-                                  height: 40,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                  child: DropdownButtonHideUnderline(
-                                    child: DropdownButton<int?>(
-                                      isExpanded: true,
-                                      dropdownColor: const Color(0xFF2C2C2C),
-                                      value: aniosDisponibles.contains(_anioFiltro) ? _anioFiltro : null,
-                                      items: [
-                                        const DropdownMenuItem(value: null, child: Text('Año: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
-                                        ...aniosDisponibles.map((a) => DropdownMenuItem(value: a, child: Text('📅 Año $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
-                                      ],
-                                      onChanged: (v) => setState(() {
-                                        _anioFiltro = v;
-                                        _rangoFechas = null;
-                                      }),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(left: 4, bottom: 3),
-                                  child: Text('Filtro Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
-                                ),
-                                Container(
-                                  height: 40,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                  child: DropdownButtonHideUnderline(
-                                    child: DropdownButton<int?>(
-                                      isExpanded: true,
-                                      dropdownColor: const Color(0xFF2C2C2C),
-                                      value: _mesFiltro,
-                                      items: [
-                                        const DropdownMenuItem(value: null, child: Text('Mes: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
-                                        ..._nombresMeses.entries.map((e) => DropdownMenuItem(value: e.key, child: Text('📅 ${e.value}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
-                                      ],
-                                      onChanged: (v) => setState(() {
-                                        _mesFiltro = v;
-                                        if (v == null) _semanaFiltro = null;
-                                        _rangoFechas = null;
-                                      }),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(left: 4, bottom: 3),
-                                  child: Text('Filtro Semana del Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
-                                ),
-                                Container(
-                                  height: 40,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                  child: DropdownButtonHideUnderline(
-                                    child: DropdownButton<int?>(
-                                      isExpanded: true,
-                                      dropdownColor: const Color(0xFF2C2C2C),
-                                      value: _semanaFiltro,
-                                      items: const [
-                                        DropdownMenuItem(value: null, child: Text('Semana: Todas las del mes', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
-                                        DropdownMenuItem(value: 1, child: Text('Semana 1 (Días 1 al 7)', style: TextStyle(fontSize: 12))),
-                                        DropdownMenuItem(value: 2, child: Text('Semana 2 (Días 8 al 14)', style: TextStyle(fontSize: 12))),
-                                        DropdownMenuItem(value: 3, child: Text('Semana 3 (Días 15 al 21)', style: TextStyle(fontSize: 12))),
-                                        DropdownMenuItem(value: 4, child: Text('Semana 4 (Días 22 al 28)', style: TextStyle(fontSize: 12))),
-                                        DropdownMenuItem(value: 5, child: Text('Semana 5 (Días 29 al 31)', style: TextStyle(fontSize: 12))),
-                                      ],
-                                      onChanged: (v) => setState(() {
-                                        _semanaFiltro = v;
-                                        _rangoFechas = null;
-                                      }),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: SizedBox(
-                              height: 40,
-                              child: ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _rangoFechas != null ? Colors.amber : Colors.white10,
-                                  foregroundColor: _rangoFechas != null ? Colors.black : Colors.white,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                ),
-                                icon: const Icon(Icons.date_range, size: 16),
-                                label: Text(
-                                  _etiquetaRango(),
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                onPressed: _abrirSelectorDiaORango,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Container(
-                              height: 40,
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
-                              decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<String?>(
-                                  isExpanded: true,
-                                  dropdownColor: const Color(0xFF2C2C2C),
-                                  value: grupos.contains(_grupoSeleccionado) ? _grupoSeleccionado : null,
-                                  hint: const Text('Grupo Art.', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                  items: [
-                                    const DropdownMenuItem(value: null, child: Text('Grupo: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
-                                    ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
-                                  ],
-                                  onChanged: (v) => setState(() => _grupoSeleccionado = v),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      InkWell(
-                        onTap: () => setState(() => _filtrosOcultos = true),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.amber.withOpacity(0.4)),
-                          ),
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                              SizedBox(width: 4),
-                              Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                              const Text(
+                                '⚡ Ventana activa: Últimos 3 meses (Máx. 100 registros)',
+                                style: TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                              if (_rangoFechas != null || _semanaFiltro != null || _grupoSeleccionado != null || _mesFiltro != hoy.month || _anioFiltro != anioActual)
+                                TextButton.icon(
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  icon: const Icon(Icons.refresh, color: Colors.amberAccent, size: 15),
+                                  label: const Text('Restaurar Mes Actual', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                  onPressed: () => setState(() {
+                                    _rangoFechas = null;
+                                    _semanaFiltro = null;
+                                    _grupoSeleccionado = null;
+                                    _anioFiltro = hoy.year;
+                                    _mesFiltro = hoy.month;
+                                  }),
+                                ),
                             ],
                           ),
-                        ),
-                      ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 3),
+                                      child: Text('Filtro Año', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: aniosDisponibles.contains(_anioFiltro) ? _anioFiltro : null,
+                                          items: [
+                                            const DropdownMenuItem(value: null, child: Text('Año: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                            ...aniosDisponibles.map((a) => DropdownMenuItem(value: a, child: Text('Año $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _anioFiltro = v;
+                                            _rangoFechas = null;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 3),
+                                      child: Text('Filtro Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: _mesFiltro,
+                                          items: [
+                                            const DropdownMenuItem(value: null, child: Text('Mes: Últimos 3 meses', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                            ..._nombresMeses.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _mesFiltro = v;
+                                            if (v == null) _semanaFiltro = null;
+                                            _rangoFechas = null;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 3),
+                                      child: Text('Filtro Semana del Mes', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: _semanaFiltro,
+                                          items: const [
+                                            DropdownMenuItem(value: null, child: Text('Semana: Todas las del mes', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                            DropdownMenuItem(value: 1, child: Text('Semana 1 (Días 1 al 7)', style: TextStyle(fontSize: 12))),
+                                            DropdownMenuItem(value: 2, child: Text('Semana 2 (Días 8 al 14)', style: TextStyle(fontSize: 12))),
+                                            DropdownMenuItem(value: 3, child: Text('Semana 3 (Días 15 al 21)', style: TextStyle(fontSize: 12))),
+                                            DropdownMenuItem(value: 4, child: Text('Semana 4 (Días 22 al 28)', style: TextStyle(fontSize: 12))),
+                                            DropdownMenuItem(value: 5, child: Text('Semana 5 (Días 29 al 31)', style: TextStyle(fontSize: 12))),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _semanaFiltro = v;
+                                            _rangoFechas = null;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: SizedBox(
+                                  height: 40,
+                                  child: ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _rangoFechas != null ? Colors.amber : Colors.white10,
+                                      foregroundColor: _rangoFechas != null ? Colors.black : Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    icon: const Icon(Icons.date_range, size: 16),
+                                    label: Text(
+                                      _etiquetaRango(),
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    onPressed: _abrirSelectorDiaORango,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Container(
+                                  height: 40,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<String?>(
+                                      isExpanded: true,
+                                      dropdownColor: const Color(0xFF2C2C2C),
+                                      value: grupos.contains(_grupoSeleccionado) ? _grupoSeleccionado : null,
+                                      hint: const Text('Grupo Art.', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                      items: [
+                                        const DropdownMenuItem(value: null, child: Text('Grupo: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold))),
+                                        ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+                                      ],
+                                      onChanged: (v) => setState(() => _grupoSeleccionado = v),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          InkWell(
+                            onTap: () => setState(() => _filtrosOcultos = true),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                  SizedBox(width: 4),
+                                  Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -461,100 +464,122 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
               Expanded(
                 child: docsFiltrados.isEmpty
                     ? const Center(child: Text('No hay tratamientos registrados en este periodo (Últimos 3 meses).', style: TextStyle(color: Colors.white54)))
-                    : Stack(
-                        children: [
-                          NotificationListener(
-                            onNotification: (ScrollNotification scrollInfo) {
-                              if (scrollInfo.metrics.axis == Axis.vertical) {
-                                if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
-                                  setState(() => _filtrosOcultos = true);
-                                }
-                                if (scrollInfo.metrics.maxScrollExtent > 0) {
-                                  double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
-                                  if ((p - _progresoScrollHistorial).abs() > 0.01) {
-                                    setState(() => _progresoScrollHistorial = p);
+                    : ValueListenableBuilder<int>(
+                        valueListenable: JerarquiaUbicacionHelper.upcCacheVersion,
+                        builder: (context, _, __) {
+                          return Stack(
+                            children: [
+                              NotificationListener<ScrollNotification>(
+                                onNotification: (ScrollNotification scrollInfo) {
+                                  if (scrollInfo.metrics.axis == Axis.vertical) {
+                                    if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 14) {
+                                      setState(() => _filtrosOcultos = true);
+                                    }
+                                    if (scrollInfo.metrics.maxScrollExtent > 0) {
+                                      double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
+                                      if ((p - _progresoScrollHistorial.value).abs() > 0.015) {
+                                        _progresoScrollHistorial.value = p;
+                                      }
+                                    }
                                   }
-                                }
-                              }
-                              return false;
-                            },
-                            child: ListView.builder(
-                        itemCount: docsFiltrados.length,
-                        itemBuilder: (context, index) {
-                          var d = docsFiltrados[index].data() as Map<String, dynamic>;
-                          DateTime? fecha = (d['fechaTratamiento'] as Timestamp?)?.toDate();
-                          String grupo = d['nombreGpoArticulos'] ?? 'SIN GRUPO';
-                          String proveedor = d['nombreProveedor'] ?? 'ND';
-                          String ubicacion = JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString());
+                                  return false;
+                                },
+                                child: ListView.builder(
+                                  cacheExtent: esZebra ? 220.0 : 500.0,
+                                  addRepaintBoundaries: true,
+                                  itemCount: docsFiltrados.length,
+                                  itemBuilder: (context, index) {
+                                    var d = docsFiltrados[index].data() as Map<String, dynamic>;
+                                    DateTime? fecha = (d['fechaTratamiento'] as Timestamp?)?.toDate();
+                                    String fechaTratTexto = fecha != null
+                                        ? "${fecha.day.toString().padLeft(2, '0')}/${fecha.month.toString().padLeft(2, '0')}/${fecha.year} ${fecha.hour.toString().padLeft(2, '0')}:${fecha.minute.toString().padLeft(2, '0')}"
+                                        : "Sin fecha";
+                                    String grupo = d['nombreGpoArticulos'] ?? 'SIN GRUPO';
+                                    String proveedor = d['nombreProveedor'] ?? 'ND';
+                                    String ubicacion = JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString());
 
-                          return Card(
-                            color: Colors.white10,
-                            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.white24)),
-                            child: ListTile(
-                              leading: const Icon(Icons.history, color: Colors.blueAccent),
-                              title: Text(d['descripcion'] ?? 'Sin descripción', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 6.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('SKU: ${d['sku'] ?? 'ND'} • Grupo: $grupo', style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                    Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
-                                    Text('Prov: $proveedor', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                    Text('Ubicación: $ubicacion', style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                                    const SizedBox(height: 2),
-                                    Text('Retirado: ${d['cantidadTratada']} pzas • ${d['motivo']}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                                    Text('Usuario: ${d['usuario']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                                  ],
-                                ),
-                              ),
-                              trailing: Text(fecha != null ? "${fecha.day}/${fecha.month}/${fecha.year}" : "", style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                              isThreeLine: true,
-                            ),
-                          );
-                        },
-                      ),
-                          ),
-                          Positioned(
-                            right: 1.5,
-                            top: 6,
-                            bottom: 6,
-                            width: 3.5,
-                            child: IgnorePointer(
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  double trackH = constraints.maxHeight;
-                                  double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
-                                  double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
-                                  double thumbTop = maxTop * _progresoScrollHistorial.clamp(0.0, 1.0);
-                                  return Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.08),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Stack(
-                                      children: [
-                                        Positioned(
-                                          top: thumbTop,
-                                          left: 0,
-                                          right: 0,
-                                          height: thumbH,
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.amber.withOpacity(0.65),
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
+                                    Widget cardHist = Card(
+                                      elevation: esZebra ? 0 : 1,
+                                      color: Colors.white10,
+                                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.white24)),
+                                      child: ListTile(
+                                        leading: const Icon(Icons.history, color: Colors.blueAccent),
+                                        title: Text(d['descripcion'] ?? 'Sin descripción', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                        subtitle: Padding(
+                                          padding: const EdgeInsets.only(top: 6.0),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text('SKU: ${d['sku'] ?? 'ND'} • Grupo: $grupo', style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                              Text('UPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(d)}', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                                              Text('Prov: $proveedor', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                              Text('Ubicación: $ubicacion', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                              const SizedBox(height: 2),
+                                              Text('Retirado: ${d['cantidadTratada']} pzas • ${d['motivo']}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                              Text('Fecha de tratamiento: $fechaTratTexto', style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                              Text('Usuario: ${d['usuario']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                            ],
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  );
-                                },
+                                        trailing: Text(
+                                          fecha != null ? "${fecha.day.toString().padLeft(2, '0')}/${fecha.month.toString().padLeft(2, '0')}/${fecha.year}" : "",
+                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                        ),
+                                        isThreeLine: true,
+                                      ),
+                                    );
+
+                                    return esZebra ? RepaintBoundary(child: cardHist) : cardHist;
+                                  },
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
+                              Positioned(
+                                right: 1.5,
+                                top: 6,
+                                bottom: 6,
+                                width: 3.5,
+                                child: IgnorePointer(
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      double trackH = constraints.maxHeight;
+                                      double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
+                                      double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
+                                      return ValueListenableBuilder<double>(
+                                        valueListenable: _progresoScrollHistorial,
+                                        builder: (context, prog, _) {
+                                          double thumbTop = maxTop * prog.clamp(0.0, 1.0);
+                                          return Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withOpacity(0.08),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Stack(
+                                              children: [
+                                                Positioned(
+                                                  top: thumbTop,
+                                                  left: 0,
+                                                  right: 0,
+                                                  height: thumbH,
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.amber.withOpacity(0.65),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
               ),
             ],

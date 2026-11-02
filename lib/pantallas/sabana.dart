@@ -18,6 +18,8 @@ class PantallaDashboard extends StatefulWidget {
 
 class PantallaDashboardState extends State<PantallaDashboard> {
   final TextEditingController _busquedaController = TextEditingController();
+  final ValueNotifier<double> _progresoScrollSabana = ValueNotifier<double>(0.0);
+
   String _busqueda = "";
   String? _filtroProveedor;
   String? _filtroGrupo;
@@ -27,27 +29,34 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   int? _filtroAnio = DateTime.now().year;
   int? _filtroMes;
   bool _filtroSobrestockIA = false;
+
+  // Filtro de captura
   int? _filtroCapturaAnio;
   int? _filtroCapturaMes;
   Set<int> _filtroCapturaDias = {};
-  double _progresoScrollSabana = 0.0;
+
+  // Paginación de 50 en 50 para lotes próximos a 3 meses
+  static const int kPasoPaginacionLotes = 50;
+  static const int kDiasVentanaTresMeses = 92;
+  int _limiteLotesMostrados = 50;
 
   static const Map<int, String> _nombresMeses = {
     1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
     5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
     9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
-  }; 
-  
+  };
+
   bool _modoSeleccion = false;
   bool _filtroDescuadreSAP = false;
   bool _filtrosOcultos = false;
   Set<String> _seleccionados = {};
-  
-  late Stream<QuerySnapshot> _inventarioStream; 
+
+  late Stream<QuerySnapshot> _inventarioStream;
 
   @override
   void dispose() {
     _busquedaController.dispose();
+    _progresoScrollSabana.dispose();
     super.dispose();
   }
 
@@ -55,7 +64,12 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   void initState() {
     super.initState();
     JerarquiaUbicacionHelper.precargarCacheUpc();
-    _inventarioStream = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').orderBy('fechaCaducidad').snapshots();
+    _inventarioStream = FirebaseFirestore.instance
+        .collection('tiendas')
+        .doc(widget.idTiendaGlobal)
+        .collection('inventario_activo')
+        .orderBy('fechaCaducidad')
+        .snapshots();
   }
 
   Future<String> _traducirCodigoASku(String codigo) async {
@@ -68,26 +82,38 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     return limpio;
   }
 
+  String _obtenerPrimerNombre(dynamic nombreCompleto) {
+    String raw = (nombreCompleto ?? '').toString().trim();
+    if (raw.isEmpty) return 'Piso';
+    String primero = raw.split(RegExp(r'\s+')).first;
+    return primero.toUpperCase();
+  }
 
   String _formatearFechaCapturaLote(Map<String, dynamic> d) {
     Timestamp? ts = d['fechaCaptura'] as Timestamp?;
-    if (ts == null) return 'Sin registro';
+    String nombreCorto = _obtenerPrimerNombre(d['capturista']);
+    if (ts == null) return 'Sin fecha • $nombreCorto';
     DateTime f = ts.toDate();
-    return "${f.day.toString().padLeft(2, '0')}/${f.month.toString().padLeft(2, '0')}/${f.year}";
+    String fecha = "${f.day.toString().padLeft(2, '0')}/${f.month.toString().padLeft(2, '0')}/${f.year}";
+    String hora = "${f.hour.toString().padLeft(2, '0')}:${f.minute.toString().padLeft(2, '0')}";
+    return "$fecha $hora • $nombreCorto";
   }
 
+  bool get _tieneFiltroCapturaActivo =>
+      _filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty;
+
   String _textoBotonFiltroCaptura() {
-    if (_filtroCapturaAnio == null && _filtroCapturaMes == null && _filtroCapturaDias.isEmpty) {
-      return '📥 Fecha de Captura: Todas (Año / Mes / Días)';
+    if (!_tieneFiltroCapturaActivo) {
+      return 'Filtro de captura: Todos';
     }
     List<String> partes = [];
-    if (_filtroCapturaAnio != null) partes.add('${_filtroCapturaAnio}');
+    if (_filtroCapturaAnio != null) partes.add('$_filtroCapturaAnio');
     if (_filtroCapturaMes != null) partes.add(_nombresMeses[_filtroCapturaMes] ?? 'Mes $_filtroCapturaMes');
     if (_filtroCapturaDias.isNotEmpty) {
       var diasOrd = _filtroCapturaDias.toList()..sort();
       partes.add('Días: ${diasOrd.join(", ")}');
     }
-    return '📥 Captura: ${partes.join(" • ")}';
+    return 'Captura: ${partes.join(" • ")}';
   }
 
   void _abrirSelectorDinamicoFechaCaptura(List<QueryDocumentSnapshot> todosDocs) {
@@ -100,13 +126,15 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       }
     }
 
-    List<int> aniosDisp = fechasReales.map((f) => f.year).toSet().toList()..sort((a, b) => b.compareTo(a));
-    if (aniosDisp.isEmpty) {
-      aniosDisp = [DateTime.now().year];
-    }
+    int anioCurso = DateTime.now().year;
+    int mesCurso = DateTime.now().month;
 
-    int? tempAnio = _filtroCapturaAnio;
-    int? tempMes = _filtroCapturaMes;
+    List<int> aniosDisp = {anioCurso, ...fechasReales.map((f) => f.year)}.toList()
+      ..sort((a, b) => b.compareTo(a));
+
+    // Inicia siempre con el año y mes en curso hasta que el usuario decida cambiarlo
+    int? tempAnio = _tieneFiltroCapturaActivo ? _filtroCapturaAnio : anioCurso;
+    int? tempMes = _tieneFiltroCapturaActivo ? _filtroCapturaMes : mesCurso;
     Set<int> tempDias = Set<int>.from(_filtroCapturaDias);
 
     showDialog(
@@ -114,7 +142,12 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) {
           List<DateTime> filtradasPorAnio = fechasReales.where((f) => tempAnio == null || f.year == tempAnio).toList();
-          List<int> mesesDisp = filtradasPorAnio.map((f) => f.month).toSet().toList()..sort();
+          List<int> mesesDisp = {
+            if (tempMes != null) tempMes!,
+            mesCurso,
+            ...filtradasPorAnio.map((f) => f.month),
+          }.toList()
+            ..sort();
 
           List<DateTime> filtradasPorAnioYMes = filtradasPorAnio.where((f) => tempMes == null || f.month == tempMes).toList();
           Map<int, int> lotesPorDia = {};
@@ -126,24 +159,21 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           return AlertDialog(
             backgroundColor: const Color(0xFF1E1E24),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.cyanAccent, width: 1.5)),
-            title: const Row(
-              children: [
-                Icon(Icons.event_available, color: Colors.cyanAccent, size: 22),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Filtrar por Fecha de Captura',
-                    style: TextStyle(color: Colors.cyanAccent, fontSize: 15, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
+            title: const Text(
+              'Filtrar por Fecha de Captura',
+              style: TextStyle(color: Colors.cyanAccent, fontSize: 15, fontWeight: FontWeight.bold),
             ),
             content: SizedBox(
               width: 440,
-              height: 380,
+              height: 390,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const Text(
+                    'Al aplicar este filtro se ignoran los filtros de caducidad para mostrar todo lo capturado en la fecha elegida.',
+                    style: TextStyle(color: Colors.white60, fontSize: 10),
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -168,7 +198,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     ),
                                     ...aniosDisp.map((a) => DropdownMenuItem<int?>(
                                           value: a,
-                                          child: Text('📅 $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                          child: Text('$a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                                         )),
                                   ],
                                   onChanged: (val) {
@@ -252,7 +282,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                   Expanded(
                     child: diasDisponibles.isEmpty
                         ? const Center(
-                            child: Text('No hay fechas de captura registradas en este periodo.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                            child: Text(
+                              'No hay capturas registradas en este mes. Cambia el mes arriba para ver otros días.',
+                              style: TextStyle(color: Colors.white54, fontSize: 12),
+                              textAlign: TextAlign.center,
+                            ),
                           )
                         : ListView.builder(
                             itemCount: diasDisponibles.length,
@@ -261,6 +295,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               int cantLotes = lotesPorDia[dia] ?? 0;
                               bool marcado = tempDias.contains(dia);
                               return Card(
+                                elevation: 0,
                                 color: marcado ? Colors.cyanAccent.withOpacity(0.18) : Colors.white10,
                                 margin: const EdgeInsets.symmetric(vertical: 3),
                                 child: CheckboxListTile(
@@ -270,7 +305,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                   checkColor: Colors.black,
                                   value: marcado,
                                   title: Text(
-                                    '📅 Día ${dia.toString().padLeft(2, '0')}',
+                                    'Día ${dia.toString().padLeft(2, '0')}',
                                     style: TextStyle(
                                       color: marcado ? Colors.cyanAccent : Colors.white,
                                       fontWeight: FontWeight.bold,
@@ -305,6 +340,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     _filtroCapturaAnio = null;
                     _filtroCapturaMes = null;
                     _filtroCapturaDias.clear();
+                    _limiteLotesMostrados = kPasoPaginacionLotes;
                   });
                   Navigator.pop(ctx);
                 },
@@ -314,18 +350,18 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('CANCELAR', style: TextStyle(color: Colors.white54, fontSize: 11)),
               ),
-              ElevatedButton.icon(
+              ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
-                icon: const Icon(Icons.check, size: 16),
-                label: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                 onPressed: () {
                   setState(() {
                     _filtroCapturaAnio = tempAnio;
                     _filtroCapturaMes = tempMes;
                     _filtroCapturaDias = tempDias;
+                    _limiteLotesMostrados = kPasoPaginacionLotes;
                   });
                   Navigator.pop(ctx);
                 },
+                child: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
               ),
             ],
           );
@@ -344,8 +380,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       _filtroSobrestockIA = false;
       _filtroCapturaAnio = null;
       _filtroCapturaMes = null;
-      _filtroCapturaDias.clear(); 
+      _filtroCapturaDias.clear();
       _filtroGrupo = null;
+      _limiteLotesMostrados = kPasoPaginacionLotes;
     });
   }
 
@@ -367,16 +404,17 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 batch.delete(FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('inventario_activo').doc(id));
               }
               await batch.commit();
+              if (!mounted) return;
               setState(() {
                 _modoSeleccion = false;
                 _seleccionados.clear();
               });
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lotes eliminados exitosamente'), backgroundColor: Colors.green));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lotes eliminados exitosamente'), backgroundColor: Colors.green));
             },
-            child: const Text('SÍ, BORRAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-          )
-        ]
-      )
+            child: const Text('SÍ, BORRAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -404,7 +442,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
                   ],
                   onChanged: (val) => setDialogState(() => motivoSeleccionado = val!),
-                )
+                ),
               ],
             ),
             actions: [
@@ -415,7 +453,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                   Navigator.pop(ctx);
                   var batch = FirebaseFirestore.instance.batch();
                   var refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
-                  
+
                   for (String id in _seleccionados) {
                     var docRef = refTienda.collection('inventario_activo').doc(id);
                     var docSnap = await docRef.get();
@@ -423,10 +461,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       var d = docSnap.data() as Map<String, dynamic>;
                       int cant = d['cantidad'] ?? 0;
                       double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
-                      
+
                       var histRef = refTienda.collection('historial_tratamientos').doc();
                       batch.set(histRef, {
                         'sku': d['sku'],
+                        'ean': JerarquiaUbicacionHelper.obtenerUpcVisual(d),
                         'descripcion': d['descripcion'],
                         'nombreProveedor': d['nombreProveedor'] ?? 'ND',
                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
@@ -435,7 +474,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         'motivo': motivoSeleccionado,
                         'costoTotal': cant * precio,
                         'fechaTratamiento': FieldValue.serverTimestamp(),
-                        'usuario': widget.usuarioActual
+                        'usuario': widget.usuarioActual,
                       });
                       FinanzasService.actualizarResumenEnBatch(
                         batch: batch,
@@ -444,7 +483,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         cantidad: cant,
                         monto: cant * precio,
                       );
-                      
+
                       if (motivoSeleccionado == 'Saldado / Promoción') {
                         batch.update(docRef, {
                           'enPromocion': true,
@@ -460,25 +499,26 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     }
                   }
                   await batch.commit();
+                  if (!mounted) return;
                   setState(() {
                     _modoSeleccion = false;
                     _seleccionados.clear();
                   });
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tratamiento masivo aplicado exitosamente'), backgroundColor: Colors.green));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tratamiento masivo aplicado exitosamente'), backgroundColor: Colors.green));
                 },
-                child: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold))
-              )
-            ]
+                child: const Text('APLICAR', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
           );
-        }
-      )
+        },
+      ),
     );
   }
 
   void _verDetalleCompleto(QueryDocumentSnapshot docSnap) {
     var d = docSnap.data() as Map<String, dynamic>;
     DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -493,11 +533,11 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               _infoRow("PROVEEDOR", d['nombreProveedor']),
               _infoRow("GRUPO", d['nombreGpoArticulos']),
               _infoRow("UBICACIÓN PISO", d['ubicacion']),
-              _infoRow("CANTIDAD FÍSICA", d['cantidad'].toString() + " pzas"),
-              _infoRow("PRECIO VENTA", "MXN " + (d['precioVenta'] ?? 0).toString()),
-              _infoRow("OH TEÓRICO (SAP)", (d['oh'] ?? 'No disponible').toString() + " pzas"),
-              _infoRow("FECHA CAPTURA", _formatearFechaCapturaLote(d)),
-              _infoRow("CADUCIDAD", "${cad.day}/${cad.month}/${cad.year}"),
+              _infoRow("CANTIDAD FÍSICA", "${d['cantidad']} pzas"),
+              _infoRow("PRECIO VENTA", "MXN ${d['precioVenta'] ?? 0}"),
+              _infoRow("OH TEÓRICO (SAP)", "${d['oh'] ?? 'No disponible'} pzas"),
+              _infoRow("CAPTURADO", _formatearFechaCapturaLote(d)),
+              _infoRow("CADUCIDAD", "${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}"),
               const SizedBox(height: 15),
               SizedBox(
                 width: double.infinity,
@@ -506,155 +546,166 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                   icon: const Icon(Icons.handyman),
                   label: const Text('DAR TRATAMIENTO', style: TextStyle(fontWeight: FontWeight.bold)),
                   onPressed: () {
-                     Navigator.pop(context);
-                     _dialogoTratamiento(docSnap);
-                  }
+                    Navigator.pop(context);
+                    _dialogoTratamiento(docSnap);
+                  },
                 ),
-              )
+              ),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () {
-             Navigator.pop(context);
-             _confirmarBorrado(docSnap);
-          }, child: const Text('BORRAR', style: TextStyle(color: Colors.redAccent))),
-          TextButton(onPressed: () {
-             Navigator.pop(context);
-             _editarRegistro(docSnap);
-          }, child: const Text('EDITAR', style: TextStyle(color: Colors.blueAccent))),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _confirmarBorrado(docSnap);
+            },
+            child: const Text('BORRAR', style: TextStyle(color: Colors.redAccent)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _editarRegistro(docSnap);
+            },
+            child: const Text('EDITAR', style: TextStyle(color: Colors.blueAccent)),
+          ),
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('CERRAR', style: TextStyle(color: Colors.white54))),
         ],
-      )
+      ),
     );
   }
 
   void _dialogoTratamiento(QueryDocumentSnapshot docSnap) {
-     var d = docSnap.data() as Map<String, dynamic>;
-     int cantOriginal = d['cantidad'] ?? 0;
-     DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
-     int dias = cad.difference(DateTime.now()).inDays;
-     bool bloquearPromocion = (d['enPromocion'] == true) || (dias <= 15);
-     TextEditingController cantCtrl = TextEditingController(text: cantOriginal.toString());
-     String motivoSeleccionado = 'Merma / Destrucción';
+    var d = docSnap.data() as Map<String, dynamic>;
+    int cantOriginal = d['cantidad'] ?? 0;
+    DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+    int dias = cad.difference(DateTime.now()).inDays;
+    bool bloquearPromocion = (d['enPromocion'] == true) || (dias <= 15);
+    TextEditingController cantCtrl = TextEditingController(text: cantOriginal.toString());
+    String motivoSeleccionado = 'Merma / Destrucción';
 
-     showDialog(
-       context: context,
-       builder: (context) {
-         return StatefulBuilder(
-           builder: (context, setDialogState) {
-             return AlertDialog(
-               backgroundColor: const Color(0xFF1E1E1E),
-               title: const Text('Tratamiento de Mercancía', style: TextStyle(color: Colors.amber)),
-               content: Column(
-                 mainAxisSize: MainAxisSize.min,
-                 children: [
-                   Text('Lote: ${d['descripcion']}', style: const TextStyle(color: Colors.white70)),
-                   const SizedBox(height: 15),
-                   TextField(controller: cantCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Piezas a retirar', filled: true, fillColor: Colors.white10)),
-                   const SizedBox(height: 15),
-                   DropdownButtonFormField<String>(
-                     decoration: const InputDecoration(labelText: 'Motivo de Salida', filled: true, fillColor: Colors.white10),
-                     dropdownColor: const Color(0xFF2C2C2C),
-                     value: motivoSeleccionado,
-                     items: [
-                       const DropdownMenuItem(value: 'Merma / Destrucción', child: Text('📉 Merma / Destrucción')),
-                       if (!bloquearPromocion)
-                         const DropdownMenuItem(value: 'Saldado / Promoción', child: Text('🏷️ Saldado / Promoción')),
-                       const DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
-                     ],
-                     onChanged: (val) => setDialogState(() => motivoSeleccionado = val!),
-                   )
-                 ],
-               ),
-               actions: [
-                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR')),
-                 ElevatedButton(
-                   style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
-                   onPressed: () async {
-                     int cantATratar = int.tryParse(cantCtrl.text) ?? 0;
-                     if (cantATratar > 0 && cantATratar <= cantOriginal) {
-                       double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
-                       
-                       var batchTrat = FirebaseFirestore.instance.batch();
-                       var histDoc = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').doc();
-                       batchTrat.set(histDoc, {
-                         'sku': d['sku'],
-                         'descripcion': d['descripcion'],
-                         'nombreProveedor': d['nombreProveedor'] ?? 'ND',
-                         'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
-                         'ubicacion': d['ubicacion'],
-                         'cantidadTratada': cantATratar,
-                         'motivo': motivoSeleccionado,
-                         'costoTotal': cantATratar * precio,
-                         'fechaTratamiento': FieldValue.serverTimestamp(),
-                         'usuario': widget.usuarioActual
-                       });
-                       FinanzasService.actualizarResumenEnBatch(
-                         batch: batchTrat,
-                         idTiendaGlobal: widget.idTiendaGlobal,
-                         motivo: motivoSeleccionado,
-                         cantidad: cantATratar,
-                         monto: cantATratar * precio,
-                       );
-                       await batchTrat.commit();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              title: const Text('Tratamiento de Mercancía', style: TextStyle(color: Colors.amber)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Lote: ${d['descripcion']}', style: const TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 15),
+                  TextField(
+                    controller: cantCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Piezas a retirar', filled: true, fillColor: Colors.white10),
+                  ),
+                  const SizedBox(height: 15),
+                  DropdownButtonFormField<String>(
+                    decoration: const InputDecoration(labelText: 'Motivo de Salida', filled: true, fillColor: Colors.white10),
+                    dropdownColor: const Color(0xFF2C2C2C),
+                    value: motivoSeleccionado,
+                    items: [
+                      const DropdownMenuItem(value: 'Merma / Destrucción', child: Text('📉 Merma / Destrucción')),
+                      if (!bloquearPromocion)
+                        const DropdownMenuItem(value: 'Saldado / Promoción', child: Text('🏷️ Saldado / Promoción')),
+                      const DropdownMenuItem(value: 'Devolución a Proveedor', child: Text('📦 Devolución a Proveedor')),
+                    ],
+                    onChanged: (val) => setDialogState(() => motivoSeleccionado = val!),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR')),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
+                  onPressed: () async {
+                    int cantATratar = int.tryParse(cantCtrl.text) ?? 0;
+                    if (cantATratar > 0 && cantATratar <= cantOriginal) {
+                      double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
 
-                       if (motivoSeleccionado == 'Saldado / Promoción') {
-                         await docSnap.reference.update({
-                           'enPromocion': true,
+                      var batchTrat = FirebaseFirestore.instance.batch();
+                      var histDoc = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal).collection('historial_tratamientos').doc();
+                      batchTrat.set(histDoc, {
+                        'sku': d['sku'],
+                        'ean': JerarquiaUbicacionHelper.obtenerUpcVisual(d),
+                        'descripcion': d['descripcion'],
+                        'nombreProveedor': d['nombreProveedor'] ?? 'ND',
+                        'nombreGpoArticulos': d['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                        'ubicacion': d['ubicacion'],
+                        'cantidadTratada': cantATratar,
+                        'motivo': motivoSeleccionado,
+                        'costoTotal': cantATratar * precio,
+                        'fechaTratamiento': FieldValue.serverTimestamp(),
+                        'usuario': widget.usuarioActual,
+                      });
+                      FinanzasService.actualizarResumenEnBatch(
+                        batch: batchTrat,
+                        idTiendaGlobal: widget.idTiendaGlobal,
+                        motivo: motivoSeleccionado,
+                        cantidad: cantATratar,
+                        monto: cantATratar * precio,
+                      );
+                      await batchTrat.commit();
+
+                      if (motivoSeleccionado == 'Saldado / Promoción') {
+                        await docSnap.reference.update({
+                          'enPromocion': true,
                           if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
                           if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
                           if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
-                           'piezasEnPromocion': cantATratar,
-                           'fechaPromocion': FieldValue.serverTimestamp(),
-                         });
-                       } else if (cantATratar == cantOriginal) {
-                         await docSnap.reference.delete();
-                       } else {
-                         await docSnap.reference.update({
-                           'cantidad': cantOriginal - cantATratar,
-                           if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
-                           if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
-                           if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
-                         });
-                       }
+                          'piezasEnPromocion': cantATratar,
+                          'fechaPromocion': FieldValue.serverTimestamp(),
+                        });
+                      } else if (cantATratar == cantOriginal) {
+                        await docSnap.reference.delete();
+                      } else {
+                        await docSnap.reference.update({
+                          'cantidad': cantOriginal - cantATratar,
+                          if (d['comentarioCorporativo'] != null) 'instruccionCorpEjecutada': true,
+                          if (d['comentarioCorporativo'] != null) 'ejecutadaPorCorp': widget.usuarioActual,
+                          if (d['comentarioCorporativo'] != null) 'motivoEjecucionCorp': motivoSeleccionado,
+                        });
+                      }
 
-                       if (mounted) {
-                         Navigator.pop(context);
-                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tratamiento registrado en el historial.'), backgroundColor: Colors.green));
-                       }
-                     }
-                   }, 
-                   child: const Text('APLICAR TRATAMIENTO')
-                 )
-               ],
-             );
-           }
-         );
-       }
-     );
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tratamiento registrado en el historial.'), backgroundColor: Colors.green));
+                      }
+                    }
+                  },
+                  child: const Text('APLICAR TRATAMIENTO'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _confirmarBorrado(QueryDocumentSnapshot docSnap) {
     showDialog(
-       context: context,
-       builder: (context) => AlertDialog(
-          title: const Text('¿Borrar Registro?', style: TextStyle(color: Colors.white)),
-          content: const Text('Esta acción eliminará el producto del inventario en piso. ¿Estás seguro?', style: TextStyle(color: Colors.white70)),
-          backgroundColor: const Color(0xFF1E1E1E),
-          actions: [
-             TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
-             ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-                onPressed: () {
-                   docSnap.reference.delete();
-                   Navigator.pop(context);
-                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro eliminado')));
-                },
-                child: const Text('SÍ, BORRAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-             )
-          ]
-       )
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¿Borrar Registro?', style: TextStyle(color: Colors.white)),
+        content: const Text('Esta acción eliminará el producto del inventario en piso. ¿Estás seguro?', style: TextStyle(color: Colors.white70)),
+        backgroundColor: const Color(0xFF1E1E1E),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () {
+              docSnap.reference.delete();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro eliminado')));
+            },
+            child: const Text('SÍ, BORRAR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -663,7 +714,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     String skuOriginalLote = (d['sku'] ?? '').toString().trim();
     TextEditingController cantCtrl = TextEditingController(text: d['cantidad'].toString());
     TextEditingController skuCtrl = TextEditingController(text: skuOriginalLote);
-    TextEditingController eanCtrl = TextEditingController(text: (d['ean'] ?? (skuOriginalLote.length >= 11 ? skuOriginalLote : '')).toString());
+    TextEditingController eanCtrl = TextEditingController(text: JerarquiaUbicacionHelper.obtenerUpcVisual(d) == 'SIN UPC' ? '' : JerarquiaUbicacionHelper.obtenerUpcVisual(d));
     TextEditingController descCtrl = TextEditingController(text: (d['descripcion'] ?? 'Artículo Nuevo').toString());
     DateTime fechaOriginal = (d['fechaCaducidad'] as Timestamp).toDate();
     DateTime fechaEditada = fechaOriginal;
@@ -773,22 +824,6 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               textoRaizVacio: '1. Selecciona Área (PISO / BODEGA / DISPLAY)...',
                               onRutaCambiada: (val) => setDialogState(() => localUbi = val),
                             ),
-                            if (localUbi != null)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 6),
-                                child: Text(
-                                  '📍 Ubicación final: ${JerarquiaUbicacionHelper.formatearRutaVisual(localUbi)}',
-                                  style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                ),
-                              )
-                            else
-                              const Padding(
-                                padding: const EdgeInsets.only(top: 6),
-                                child: Text(
-                                  '⚠️ Selecciona hasta el último sub-nivel de la ubicación.',
-                                  style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
-                                ),
-                              ),
                           ],
                         );
                       },
@@ -875,7 +910,6 @@ class PantallaDashboardState extends State<PantallaDashboard> {
 
                       await docSnap.reference.update(updateData);
 
-                      // Propagar la actualización de SKU/UPC y Descripción a TODAS las instancias de este artículo en la tienda
                       int totalInstancias = await JerarquiaUbicacionHelper.actualizarArticuloEnTodasLasInstancias(
                         idTiendaGlobal: widget.idTiendaGlobal,
                         codigoAnterior: skuOriginalLote,
@@ -910,10 +944,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   Widget _infoRow(String label, dynamic value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: RichText(text: TextSpan(children: [
-        TextSpan(text: label + ": ", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
-        TextSpan(text: value.toString(), style: const TextStyle(color: Colors.amberAccent, fontSize: 14)),
-      ])),
+      child: RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(text: "$label: ", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
+            TextSpan(text: value.toString(), style: const TextStyle(color: Colors.amberAccent, fontSize: 14)),
+          ],
+        ),
+      ),
     );
   }
 
@@ -922,9 +960,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay datos para descargar')));
       return;
     }
-    
+
     StringBuffer csv = StringBuffer();
-    csv.writeln("SKU,EAN,DESCRIPCION,PROVEEDOR,GRUPO_ARTICULOS,UBICACION,CANTIDAD,PRECIO_VENTA,OH_SAP,FECHA_CADUCIDAD,DIAS_PARA_VENCER");
+    csv.writeln("SKU,UPC,DESCRIPCION,PROVEEDOR,GRUPO_ARTICULOS,UBICACION,CANTIDAD,PRECIO_VENTA,OH_SAP,FECHA_CAPTURA,FECHA_CADUCIDAD,DIAS_PARA_VENCER");
 
     DateTime hoy = DateTime.now();
 
@@ -932,25 +970,26 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       var d = doc.data() as Map<String, dynamic>;
       DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
       int dias = cad.difference(hoy).inDays;
-      
+
       String sku = (d['sku'] ?? '').toString();
-      String ean = (d['ean'] ?? '').toString();
-      String desc = '"' + (d['descripcion'] ?? '').toString().replaceAll('"', '""') + '"';
-      String prov = '"' + (d['nombreProveedor'] ?? '').toString().replaceAll('"', '""') + '"';
-      String gpo = '"' + (d['nombreGpoArticulos'] ?? '').toString().replaceAll('"', '""') + '"';
-      String ubi = '"' + (d['ubicacion'] ?? '').toString().replaceAll('"', '""') + '"';
+      String ean = JerarquiaUbicacionHelper.obtenerUpcVisual(d);
+      String desc = '"${(d['descripcion'] ?? '').toString().replaceAll('"', '""')}"';
+      String prov = '"${(d['nombreProveedor'] ?? '').toString().replaceAll('"', '""')}"';
+      String gpo = '"${(d['nombreGpoArticulos'] ?? '').toString().replaceAll('"', '""')}"';
+      String ubi = '"${(d['ubicacion'] ?? '').toString().replaceAll('"', '""')}"';
       String cant = (d['cantidad'] ?? 0).toString();
       String precio = (d['precioVenta'] ?? 0).toString();
       String oh = (d['oh'] ?? 0).toString();
+      String fCap = '"${_formatearFechaCapturaLote(d)}"';
       String fCad = "${cad.day}/${cad.month}/${cad.year}";
 
-      csv.writeln("$sku,$ean,$desc,$prov,$gpo,$ubi,$cant,$precio,$oh,$fCad,$dias");
+      csv.writeln("$sku,$ean,$desc,$prov,$gpo,$ubi,$cant,$precio,$oh,$fCap,$fCad,$dias");
     }
 
-    final bytes = utf8.encode('\uFEFF' + csv.toString()); 
+    final bytes = utf8.encode('\uFEFF${csv.toString()}');
     final blob = html.Blob([bytes]);
     final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)
+    html.AnchorElement(href: url)
       ..setAttribute("download", nombreArchivo)
       ..click();
     html.Url.revokeObjectUrl(url);
@@ -1116,6 +1155,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               var d = item['datos'] as Map<String, dynamic>;
                               String s = item['sku'].toString();
                               return Card(
+                                elevation: 0,
                                 color: Colors.white10,
                                 margin: const EdgeInsets.symmetric(vertical: 4),
                                 child: ListTile(
@@ -1141,6 +1181,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                       _busqueda = s.toLowerCase();
                                       _filtroAnio = null;
                                       _filtroMes = null;
+                                      _limiteLotesMostrados = kPasoPaginacionLotes;
                                     });
                                   },
                                 ),
@@ -1174,20 +1215,30 @@ class PantallaDashboardState extends State<PantallaDashboard> {
     }).toList();
 
     if (docsProximoMes.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay caducidades registradas para el próximo mes.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.redAccent));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay caducidades registradas para el próximo mes.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.redAccent),
+      );
       return;
     }
 
-    _descargarExcel(docsProximoMes, nombreArchivo: "Caducidades_${mesSig}_${anioSig}.csv");
+    _descargarExcel(docsProximoMes, nombreArchivo: "Caducidades_${mesSig}_$anioSig.csv");
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool esZebra = JerarquiaUbicacionHelper.esDispositivoZebra;
+
     return Scaffold(
       appBar: _modoSeleccion
           ? AppBar(
               backgroundColor: Colors.redAccent.shade700,
-              leading: IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _modoSeleccion = false; _seleccionados.clear(); })),
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() {
+                  _modoSeleccion = false;
+                  _seleccionados.clear();
+                }),
+              ),
               title: Text('${_seleccionados.length} seleccionados', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               actions: [
                 IconButton(icon: const Icon(Icons.handyman), tooltip: 'Tratamiento Masivo', onPressed: _tratamientoMasivo),
@@ -1221,7 +1272,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text('Inventario sano.'));
-          
+
           var provs = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreProveedor']?.toString() ?? 'ND').toSet().toList()..sort();
           var grupos = snapshot.data!.docs.map((doc) => (doc.data() as Map)['nombreGpoArticulos']?.toString() ?? 'ND').toSet().toList()..sort();
           Map<String, int> conteoPorUbicacion = {};
@@ -1243,50 +1294,29 @@ class PantallaDashboardState extends State<PantallaDashboard> {
             }
           }
 
+          int anioEnCurso = DateTime.now().year;
+          DateTime hoy = DateTime.now();
+          bool filtroAnioEnCursoActivo = !_tieneFiltroCapturaActivo && _filtroAnio == anioEnCurso && _filtroMes == null && _filtroRiesgoEspecial == null;
+
           var docsFiltrados = snapshot.data!.docs.where((doc) {
             var data = doc.data() as Map<String, dynamic>;
-            String desc = (data['descripcion'] ?? '').toString().toLowerCase();
-            String sku = (data['sku'] ?? '').toString().toLowerCase();
-            String ean = (data['ean'] ?? '').toString().toLowerCase();
             String prov = (data['nombreProveedor'] ?? 'ND').toString();
             String gpo = (data['nombreGpoArticulos'] ?? 'ND').toString();
             String ubi = (data['ubicacion'] ?? 'ND').toString();
 
             DateTime cad = (data['fechaCaducidad'] as Timestamp).toDate();
-            int dias = cad.difference(DateTime.now()).inDays;
+            int dias = cad.difference(hoy).inDays;
 
             bool coincideBusqueda = _busqueda.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busqueda, data);
             bool coincideProv = _filtroProveedor == null || prov == _filtroProveedor;
             bool coincideGpo = _filtroGrupo == null || gpo == _filtroGrupo;
-            
-            bool coincideRiesgo = true;
-            if (_filtroRiesgoEspecial != null) {
-              if (_filtroRiesgoEspecial == 'caducado') coincideRiesgo = dias < 0;
-              else if (_filtroRiesgoEspecial == 'critico') coincideRiesgo = dias >= 0 && dias <= 14;
-              else if (_filtroRiesgoEspecial == 'proximo') coincideRiesgo = dias > 14 && dias <= 30;
-              else if (_filtroRiesgoEspecial == 'sano') coincideRiesgo = dias > 30;
-            }
-            
+
             List<String> prefijoUbi = _filtroMueble != null
                 ? JerarquiaUbicacionHelper.descomponerRuta(_filtroMueble!)
                 : [];
-            bool coincideTipoUbi = true;
             bool coincideMueble = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(ubi, prefijoUbi);
-            bool coincideAnio = _filtroAnio == null || cad.year == _filtroAnio;
-            bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
+
             bool coincideSobrestock = !_filtroSobrestockIA || JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(data) != null;
-            bool coincideFechaCaptura = true;
-            if (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty) {
-              Timestamp? tsCap = data['fechaCaptura'] as Timestamp?;
-              if (tsCap == null) {
-                coincideFechaCaptura = false;
-              } else {
-                DateTime fCap = tsCap.toDate();
-                if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) coincideFechaCaptura = false;
-                if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) coincideFechaCaptura = false;
-                if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) coincideFechaCaptura = false;
-              }
-            }
             bool coincideDescuadre = true;
             if (_filtroDescuadreSAP) {
               String skuRaw = (data['sku'] ?? '').toString();
@@ -1294,10 +1324,46 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               int ohSap = int.tryParse((data['oh'] ?? '').toString().split('.')[0].trim()) ?? -1;
               coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
             }
-            return coincideBusqueda && coincideProv && coincideGpo && coincideRiesgo && coincideTipoUbi && coincideMueble && coincideAnio && coincideMes && coincideFechaCaptura && coincideSobrestock && coincideDescuadre;
+
+            // Si el Filtro de Captura está activo, ignora los filtros de Fecha de Caducidad (Año/Mes/3 meses)
+            if (_tieneFiltroCapturaActivo) {
+              Timestamp? tsCap = data['fechaCaptura'] as Timestamp?;
+              if (tsCap == null) return false;
+              DateTime fCap = tsCap.toDate();
+              if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) return false;
+              if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) return false;
+              if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) return false;
+
+              return coincideBusqueda && coincideProv && coincideGpo && coincideMueble && coincideSobrestock && coincideDescuadre;
+            }
+
+            bool coincideRiesgo = true;
+            if (_filtroRiesgoEspecial != null) {
+              if (_filtroRiesgoEspecial == 'caducado') coincideRiesgo = dias < 0;
+              else if (_filtroRiesgoEspecial == 'critico') coincideRiesgo = dias >= 0 && dias <= 14;
+              else if (_filtroRiesgoEspecial == 'proximo') coincideRiesgo = dias > 14 && dias <= 30;
+              else if (_filtroRiesgoEspecial == 'sano') coincideRiesgo = dias > 30;
+            }
+
+            bool coincideAnio = _filtroAnio == null || cad.year == _filtroAnio;
+            bool coincideMes = _filtroMes == null || cad.month == _filtroMes;
+            bool coincideVentana3Meses = !filtroAnioEnCursoActivo || (dias <= kDiasVentanaTresMeses);
+
+            return coincideBusqueda &&
+                coincideProv &&
+                coincideGpo &&
+                coincideRiesgo &&
+                coincideMueble &&
+                coincideAnio &&
+                coincideMes &&
+                coincideVentana3Meses &&
+                coincideSobrestock &&
+                coincideDescuadre;
           }).toList();
 
-          var docsFinales = docsFiltrados.take(100).toList();
+          int limiteActual = filtroAnioEnCursoActivo ? _limiteLotesMostrados : 100;
+          var docsFinales = docsFiltrados.take(limiteActual).toList();
+          bool mostrarPestanaCargar50Mas = filtroAnioEnCursoActivo && docsFiltrados.length > _limiteLotesMostrados;
 
           return Column(
             children: [
@@ -1317,7 +1383,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                         const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber, size: 20),
                         const SizedBox(width: 6),
                         Text(
-                          'Bajar Filtros y Buscador (${docsFiltrados.length} lotes)',
+                          'Bajar Filtros y Buscador (${docsFinales.length} de ${docsFiltrados.length} lotes)',
                           style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(width: 8),
@@ -1339,375 +1405,399 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       maxHeight: MediaQuery.of(context).size.height * 0.44,
                     ),
                     padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                    decoration: const BoxDecoration(color: Colors.black, border: Border(bottom: BorderSide(color: Colors.white24, width: 1))),
+                    decoration: const BoxDecoration(
+                      color: Colors.black,
+                      border: Border(bottom: BorderSide(color: Colors.white24, width: 1)),
+                    ),
                     child: SingleChildScrollView(
                       child: Column(
                         children: [
-
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.center,
-                      children: [
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white),
-                          icon: const Icon(Icons.refresh, size: 16),
-                          label: const Text('Limpiar', style: TextStyle(fontSize: 12)),
-                          onPressed: () {
-                             _busquedaController.clear();
-                             setState(() {
-                               _busqueda = "";
-                               _filtroProveedor = null;
-                               _filtroGrupo = null;
-                               _filtroRiesgoEspecial = null;
-      _filtroTipoUbicacion = null;
-      _filtroMueble = null;
-      _filtroAnio = DateTime.now().year;
-      _filtroMes = null;
-      _filtroDescuadreSAP = false;
-      _filtroSobrestockIA = false;
-      _filtroCapturaAnio = null;
-      _filtroCapturaMes = null;
-      _filtroCapturaDias.clear();
-                             });
-                          }
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
-                          icon: const Icon(Icons.download, size: 16),
-                          label: const Text('CSV Filtros', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          onPressed: () => _descargarExcel(docsFiltrados),
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent, foregroundColor: Colors.black),
-                          icon: const Icon(Icons.date_range, size: 16),
-                          label: const Text('CSV Próx. Mes', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          onPressed: () => _descargarProximoMes(snapshot.data!.docs),
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _filtroDescuadreSAP ? Colors.redAccent : Colors.white10,
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: _filtroDescuadreSAP ? Colors.amberAccent : Colors.redAccent),
-                          ),
-                          icon: const Icon(Icons.compare_arrows, size: 16),
-                          label: Text(_filtroDescuadreSAP ? 'Viendo Descuadre SAP' : 'Descuadre vs SAP', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          onPressed: () => setState(() {
-                            _filtroDescuadreSAP = !_filtroDescuadreSAP;
-                            if (_filtroDescuadreSAP) _filtroMes = null;
-                          }),
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _filtroSobrestockIA ? Colors.deepOrangeAccent : Colors.white10,
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: _filtroSobrestockIA ? Colors.amberAccent : Colors.deepOrangeAccent),
-                          ),
-                          icon: const Icon(Icons.psychology, size: 16),
-                          label: Text(_filtroSobrestockIA ? 'Viendo Sobrestock IA' : '🧠 Sobrestock IA', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          onPressed: () => setState(() {
-                            _filtroSobrestockIA = !_filtroSobrestockIA;
-                            if (_filtroSobrestockIA) {
-                              _filtroAnio = null;
-                              _filtroMes = null;
-                            }
-                          }),
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.cyanAccent.withOpacity(0.18),
-                            foregroundColor: Colors.cyanAccent,
-                            side: const BorderSide(color: Colors.cyanAccent),
-                          ),
-                          icon: const Icon(Icons.policy, size: 16),
-                          label: const Text('🕵️‍♂️ Auditor IA SAP', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          onPressed: () => _mostrarAuditorIASap(snapshot.data!.docs),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _busquedaController,
-                      decoration: InputDecoration(
-                        hintText: '💬 Buscar SKU, UPC o frase IA (ej. "toyo bodega enero", "< 20 dias")...',
-                        prefixIcon: const Icon(Icons.search, color: Colors.amber),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
-                          tooltip: 'Escanear Código',
-                          onPressed: () async {
-                             String? codigoEscaneado = await Navigator.push(
-                               context, 
-                               MaterialPageRoute(builder: (context) => const PantallaEscanerRapido())
-                             );
-                             if (codigoEscaneado != null && codigoEscaneado.isNotEmpty) {
-                                String skuTraducido = await _traducirCodigoASku(codigoEscaneado);
-                                _busquedaController.text = skuTraducido;
-                                setState(() => _busqueda = skuTraducido.toLowerCase());
-                             }
-                          }
-                        ),
-                        filled: true, fillColor: Colors.white10,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                        contentPadding: const EdgeInsets.symmetric(vertical: 0)
-                      ),
-                      onChanged: (v) => setState(() => _busqueda = v.toLowerCase()),
-                      onSubmitted: (v) async {
-                        String traducido = await _traducirCodigoASku(v);
-                        if (traducido != v.trim()) {
-                          _busquedaController.text = traducido;
-                          setState(() => _busqueda = traducido.toLowerCase());
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
                             children: [
-                              const Padding(
-                                padding: EdgeInsets.only(left: 4, bottom: 4),
-                                child: Text('Filtro proveedor', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white),
+                                icon: const Icon(Icons.refresh, size: 16),
+                                label: const Text('Limpiar', style: TextStyle(fontSize: 12)),
+                                onPressed: () {
+                                  _busquedaController.clear();
+                                  setState(() {
+                                    _busqueda = "";
+                                    _filtroProveedor = null;
+                                    _filtroGrupo = null;
+                                    _filtroRiesgoEspecial = null;
+                                    _filtroTipoUbicacion = null;
+                                    _filtroMueble = null;
+                                    _filtroAnio = DateTime.now().year;
+                                    _filtroMes = null;
+                                    _filtroDescuadreSAP = false;
+                                    _filtroSobrestockIA = false;
+                                    _filtroCapturaAnio = null;
+                                    _filtroCapturaMes = null;
+                                    _filtroCapturaDias.clear();
+                                    _limiteLotesMostrados = kPasoPaginacionLotes;
+                                  });
+                                },
                               ),
-                              Container(
-                                height: 40,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String?>(
-                                    isExpanded: true,
-                                    dropdownColor: const Color(0xFF2C2C2C),
-                                    value: _filtroProveedor,
-                                    hint: const Text('Filtro proveedor', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                    items: [
-                                      const DropdownMenuItem(value: null, child: Text('Filtro proveedor: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
-                                      ...provs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
-                                    ],
-                                    onChanged: (v) => setState(() => _filtroProveedor = v),
-                                  ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
+                                icon: const Icon(Icons.download, size: 16),
+                                label: const Text('CSV Filtros', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                onPressed: () => _descargarExcel(docsFiltrados),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent, foregroundColor: Colors.black),
+                                icon: const Icon(Icons.date_range, size: 16),
+                                label: const Text('CSV Próx. Mes', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                onPressed: () => _descargarProximoMes(snapshot.data!.docs),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _filtroDescuadreSAP ? Colors.redAccent : Colors.white10,
+                                  foregroundColor: Colors.white,
+                                  side: BorderSide(color: _filtroDescuadreSAP ? Colors.amberAccent : Colors.redAccent),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.only(left: 4, bottom: 4),
-                                child: Text('Filtro Grupo de Art.', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
-                              ),
-                              Container(
-                                height: 40,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String?>(
-                                    isExpanded: true,
-                                    dropdownColor: const Color(0xFF2C2C2C),
-                                    value: _filtroGrupo,
-                                    hint: const Text('Filtro Grupo de Art.', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                    items: [
-                                      const DropdownMenuItem(value: null, child: Text('Filtro Grupo de Art.: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
-                                      ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)))
-                                    ],
-                                    onChanged: (v) => setState(() => _filtroGrupo = v),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.only(left: 4, bottom: 4),
-                                child: Text('Filtro Año', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
-                              ),
-                              Container(
-                                height: 40,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<int?>(
-                                    isExpanded: true,
-                                    dropdownColor: const Color(0xFF2C2C2C),
-                                    value: _filtroAnio,
-                                    hint: const Text('Filtro Año', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                    items: [
-                                      const DropdownMenuItem<int?>(
-                                        value: null,
-                                        child: Text('Año: Todos los años', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                                      ),
-                                      ...({
-                                        DateTime.now().year - 1,
-                                        DateTime.now().year,
-                                        DateTime.now().year + 1,
-                                        DateTime.now().year + 2,
-                                        DateTime.now().year + 3,
-                                        ...snapshot.data!.docs
-                                            .map((doc) => ((doc.data() as Map)['fechaCaducidad'] as Timestamp?)?.toDate().year)
-                                            .whereType<int>(),
-                                      }.toList()
-                                            ..sort())
-                                          .map((anio) => DropdownMenuItem<int?>(
-                                                value: anio,
-                                                child: Text(
-                                                  anio == DateTime.now().year ? '📅 Año: $anio (En curso)' : '📅 Año: $anio',
-                                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                                                ),
-                                              )),
-                                    ],
-                                    onChanged: (v) => setState(() => _filtroAnio = v),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.only(left: 4, bottom: 4),
-                                child: Text('Filtro Mes', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
-                              ),
-                              Container(
-                                height: 40,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<int?>(
-                                    isExpanded: true,
-                                    dropdownColor: const Color(0xFF2C2C2C),
-                                    value: _filtroMes,
-                                    hint: const Text('Filtro Mes', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                                    items: [
-                                      const DropdownMenuItem<int?>(
-                                        value: null,
-                                        child: Text('Mes: Todos (Top 100)', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                                      ),
-                                      ..._nombresMeses.entries.map((e) => DropdownMenuItem<int?>(
-                                            value: e.key,
-                                            child: Text(e.value, style: const TextStyle(fontSize: 12)),
-                                          )),
-                                    ],
-                                    onChanged: (v) => setState(() => _filtroMes = v),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Padding(
-                          padding: EdgeInsets.only(left: 4, bottom: 4),
-                          child: Text('Filtro por Fecha de Captura (Año / Mes / Días)', style: TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SizedBox(
-                                height: 40,
-                                child: OutlinedButton.icon(
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty)
-                                        ? Colors.black
-                                        : Colors.cyanAccent,
-                                    backgroundColor: (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty)
-                                        ? Colors.cyanAccent
-                                        : Colors.white10,
-                                    side: const BorderSide(color: Colors.cyanAccent),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  ),
-                                  icon: const Icon(Icons.event_available, size: 17),
-                                  label: Text(
-                                    _textoBotonFiltroCaptura(),
-                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  onPressed: () => _abrirSelectorDinamicoFechaCaptura(snapshot.data!.docs),
-                                ),
-                              ),
-                            ),
-                            if (_filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty)
-                              IconButton(
-                                icon: const Icon(Icons.close, color: Colors.redAccent, size: 20),
-                                tooltip: 'Quitar filtro de fecha de captura',
+                                icon: const Icon(Icons.compare_arrows, size: 16),
+                                label: Text(_filtroDescuadreSAP ? 'Viendo Descuadre SAP' : 'Descuadre vs SAP', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                                 onPressed: () => setState(() {
-                                  _filtroCapturaAnio = null;
-                                  _filtroCapturaMes = null;
-                                  _filtroCapturaDias.clear();
+                                  _filtroDescuadreSAP = !_filtroDescuadreSAP;
+                                  if (_filtroDescuadreSAP) _filtroMes = null;
+                                  _limiteLotesMostrados = kPasoPaginacionLotes;
                                 }),
                               ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Padding(
-                          padding: EdgeInsets.only(left: 4, bottom: 4),
-                          child: Text('Filtro Ubicación (Desplegable por Nivel)', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
-                        ),
-                        SelectorJerarquicoUbicacion(
-                          todasLasRutas: mueblesDisponibles,
-                          rutaSeleccionada: _filtroMueble,
-                          permitirSeleccionParcial: true,
-                          textoRaizVacio: '📍 Ubicación: Todas (PISO / BODEGA / DISPLAY)',
-                          conteoLotesPorRuta: conteoPorUbicacion,
-                          onRutaCambiada: (val) => setState(() {
-                            _filtroMueble = val;
-                            _filtroTipoUbicacion = null;
-                          }),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    InkWell(
-                      onTap: () => setState(() => _filtrosOcultos = true),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.amber.withOpacity(0.4)),
-                        ),
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                            SizedBox(width: 4),
-                            Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
-                    ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _filtroSobrestockIA ? Colors.deepOrangeAccent : Colors.white10,
+                                  foregroundColor: Colors.white,
+                                  side: BorderSide(color: _filtroSobrestockIA ? Colors.amberAccent : Colors.deepOrangeAccent),
+                                ),
+                                icon: const Icon(Icons.psychology, size: 16),
+                                label: Text(_filtroSobrestockIA ? 'Viendo Sobrestock IA' : '🧠 Sobrestock IA', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                onPressed: () => setState(() {
+                                  _filtroSobrestockIA = !_filtroSobrestockIA;
+                                  if (_filtroSobrestockIA) {
+                                    _filtroAnio = null;
+                                    _filtroMes = null;
+                                  }
+                                  _limiteLotesMostrados = kPasoPaginacionLotes;
+                                }),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.cyanAccent.withOpacity(0.18),
+                                  foregroundColor: Colors.cyanAccent,
+                                  side: const BorderSide(color: Colors.cyanAccent),
+                                ),
+                                icon: const Icon(Icons.policy, size: 16),
+                                label: const Text('🕵️‍♂️ Auditor IA SAP', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                onPressed: () => _mostrarAuditorIASap(snapshot.data!.docs),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: _busquedaController,
+                            decoration: InputDecoration(
+                              hintText: '💬 Buscar SKU, UPC o frase IA (ej. "toyo bodega enero", "< 20 dias")...',
+                              prefixIcon: const Icon(Icons.search, color: Colors.amber),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
+                                tooltip: 'Escanear Código',
+                                onPressed: () async {
+                                  String? codigoEscaneado = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (context) => const PantallaEscanerRapido()),
+                                  );
+                                  if (codigoEscaneado != null && codigoEscaneado.isNotEmpty) {
+                                    String skuTraducido = await _traducirCodigoASku(codigoEscaneado);
+                                    _busquedaController.text = skuTraducido;
+                                    setState(() {
+                                      _busqueda = skuTraducido.toLowerCase();
+                                      _limiteLotesMostrados = kPasoPaginacionLotes;
+                                    });
+                                  }
+                                },
+                              ),
+                              filled: true,
+                              fillColor: Colors.white10,
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                              contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                            ),
+                            onChanged: (v) => setState(() {
+                              _busqueda = v.toLowerCase();
+                              _limiteLotesMostrados = kPasoPaginacionLotes;
+                            }),
+                            onSubmitted: (v) async {
+                              String traducido = await _traducirCodigoASku(v);
+                              if (traducido != v.trim()) {
+                                _busquedaController.text = traducido;
+                                setState(() {
+                                  _busqueda = traducido.toLowerCase();
+                                  _limiteLotesMostrados = kPasoPaginacionLotes;
+                                });
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 4),
+                                      child: Text('Filtro proveedor', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<String?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: _filtroProveedor,
+                                          hint: const Text('Filtro proveedor', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                          items: [
+                                            const DropdownMenuItem(value: null, child: Text('Filtro proveedor: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
+                                            ...provs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _filtroProveedor = v;
+                                            _limiteLotesMostrados = kPasoPaginacionLotes;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 4),
+                                      child: Text('Filtro Grupo de Art.', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<String?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: _filtroGrupo,
+                                          hint: const Text('Filtro Grupo de Art.', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                          items: [
+                                            const DropdownMenuItem(value: null, child: Text('Filtro Grupo de Art.: Todos', style: TextStyle(fontSize: 12, color: Colors.greenAccent))),
+                                            ...grupos.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _filtroGrupo = v;
+                                            _limiteLotesMostrados = kPasoPaginacionLotes;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 4),
+                                      child: Text('Filtro Año', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: _filtroAnio,
+                                          hint: const Text('Filtro Año', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                          items: [
+                                            const DropdownMenuItem<int?>(
+                                              value: null,
+                                              child: Text('Año: Todos los años', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                            ),
+                                            ...({
+                                              DateTime.now().year - 1,
+                                              DateTime.now().year,
+                                              DateTime.now().year + 1,
+                                              DateTime.now().year + 2,
+                                              DateTime.now().year + 3,
+                                              ...snapshot.data!.docs
+                                                  .map((doc) => ((doc.data() as Map)['fechaCaducidad'] as Timestamp?)?.toDate().year)
+                                                  .whereType<int>(),
+                                            }.toList()
+                                                  ..sort())
+                                                .map((anio) => DropdownMenuItem<int?>(
+                                                      value: anio,
+                                                      child: Text(
+                                                        anio == DateTime.now().year ? 'Año: $anio (En curso • Próx. 3 meses)' : 'Año: $anio',
+                                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                                      ),
+                                                    )),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _filtroAnio = v;
+                                            _limiteLotesMostrados = kPasoPaginacionLotes;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(left: 4, bottom: 4),
+                                      child: Text('Filtro Mes', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int?>(
+                                          isExpanded: true,
+                                          dropdownColor: const Color(0xFF2C2C2C),
+                                          value: _filtroMes,
+                                          hint: const Text('Filtro Mes', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                                          items: [
+                                            const DropdownMenuItem<int?>(
+                                              value: null,
+                                              child: Text('Mes: Todos (Top 50 a 3 meses)', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                            ),
+                                            ..._nombresMeses.entries.map((e) => DropdownMenuItem<int?>(
+                                                  value: e.key,
+                                                  child: Text(e.value, style: const TextStyle(fontSize: 12)),
+                                                )),
+                                          ],
+                                          onChanged: (v) => setState(() {
+                                            _filtroMes = v;
+                                            _limiteLotesMostrados = kPasoPaginacionLotes;
+                                          }),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro de captura', style: TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                              ),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 40,
+                                      child: OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: _tieneFiltroCapturaActivo ? Colors.black : Colors.cyanAccent,
+                                          backgroundColor: _tieneFiltroCapturaActivo ? Colors.cyanAccent : Colors.white10,
+                                          side: const BorderSide(color: Colors.cyanAccent),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        onPressed: () => _abrirSelectorDinamicoFechaCaptura(snapshot.data!.docs),
+                                        child: Text(
+                                          _textoBotonFiltroCaptura(),
+                                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (_tieneFiltroCapturaActivo)
+                                    IconButton(
+                                      icon: const Icon(Icons.close, color: Colors.redAccent, size: 20),
+                                      tooltip: 'Quitar filtro de captura',
+                                      onPressed: () => setState(() {
+                                        _filtroCapturaAnio = null;
+                                        _filtroCapturaMes = null;
+                                        _filtroCapturaDias.clear();
+                                        _limiteLotesMostrados = kPasoPaginacionLotes;
+                                      }),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text('Filtro Ubicación (Desplegable por Nivel)', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                              ),
+                              SelectorJerarquicoUbicacion(
+                                todasLasRutas: mueblesDisponibles,
+                                rutaSeleccionada: _filtroMueble,
+                                permitirSeleccionParcial: true,
+                                textoRaizVacio: '📍 Ubicación: Todas (PISO / BODEGA / DISPLAY)',
+                                conteoLotesPorRuta: conteoPorUbicacion,
+                                onRutaCambiada: (val) => setState(() {
+                                  _filtroMueble = val;
+                                  _filtroTipoUbicacion = null;
+                                  _limiteLotesMostrados = kPasoPaginacionLotes;
+                                }),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          InkWell(
+                            onTap: () => setState(() => _filtrosOcultos = true),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
+                                  SizedBox(width: 4),
+                                  Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1716,179 +1806,264 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               Expanded(
                 child: docsFinales.isEmpty
                     ? const Center(child: Text('No hay productos que coincidan.', style: TextStyle(color: Colors.white54)))
-                    : Stack(
-                        children: [
-                          NotificationListener(
-                            onNotification: (ScrollNotification scrollInfo) {
-                              if (scrollInfo.metrics.axis == Axis.vertical) {
-                                if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 12) {
-                                  setState(() => _filtrosOcultos = true);
-                                }
-                                if (scrollInfo.metrics.maxScrollExtent > 0) {
-                                  double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
-                                  if ((p - _progresoScrollSabana).abs() > 0.01) {
-                                    setState(() => _progresoScrollSabana = p);
-                                  }
-                                }
-                              }
-                              return false;
-                            },
-                            child: ListView.builder(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemCount: docsFinales.length,
-                        itemBuilder: (context, i) {
-                          var d = docsFinales[i].data() as Map<String, dynamic>;
-                          String docId = docsFinales[i].id;
-                          DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
-                          int dias = cad.difference(DateTime.now()).inDays;
-                          Map<String, dynamic> etiqueta = EtiquetaMes.obtener(cad);
-                          bool isSelected = _seleccionados.contains(docId);
-                          
-                          return Card(
-                            color: isSelected ? Colors.redAccent.withOpacity(0.2) : Colors.white10,
-                            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: isSelected ? Colors.redAccent : Colors.white24, width: isSelected ? 2 : 1)),
-                            child: ListTile(
-                              contentPadding: const EdgeInsets.all(12),
-                              onLongPress: () {
-                                if (!_modoSeleccion) {
-                                  setState(() {
-                                    _modoSeleccion = true;
-                                    _seleccionados.add(docId);
-                                  });
-                                }
-                              },
-                              onTap: () {
-                                if (_modoSeleccion) {
-                                  setState(() {
-                                    if (isSelected) {
-                                      _seleccionados.remove(docId);
-                                      if (_seleccionados.isEmpty) _modoSeleccion = false;
-                                    } else {
-                                      _seleccionados.add(docId);
+                    : ValueListenableBuilder<int>(
+                        valueListenable: JerarquiaUbicacionHelper.upcCacheVersion,
+                        builder: (context, _, __) {
+                          return Stack(
+                            children: [
+                              NotificationListener<ScrollNotification>(
+                                onNotification: (ScrollNotification scrollInfo) {
+                                  if (scrollInfo.metrics.axis == Axis.vertical) {
+                                    if (!_filtrosOcultos && scrollInfo is ScrollUpdateNotification && (scrollInfo.scrollDelta ?? 0) > 14) {
+                                      setState(() => _filtrosOcultos = true);
                                     }
-                                  });
-                                } else {
-                                  _verDetalleCompleto(docsFinales[i]);
-                                }
-                              }, 
-                              leading: Container(
-                                width: 45, height: 45,
-                                decoration: BoxDecoration(color: etiqueta['color'].withOpacity(0.2), shape: BoxShape.circle, border: Border.all(color: etiqueta['color'])),
-                                child: Center(child: Text(dias.toString(), style: TextStyle(color: etiqueta['color'], fontWeight: FontWeight.bold, fontSize: 14))),
-                              ),
-                              title: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(d['descripcion'] ?? d['sku'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis),
-                                  const SizedBox(height: 2),
-                                  Text('SKU: ${d['sku'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}', style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '📥 Capturado: ${_formatearFechaCapturaLote(d)}  •  📅 Cad: ${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}',
-                                      style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
-                                    ),
-                                    if (JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d) != null)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d)!['detalle'].toString(),
-                                          style: const TextStyle(color: Colors.deepOrangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    if (d['edicionTemporal'] == true)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          '⏳ EDICIÓN TEMPORAL (Código orig: ${d['codigoOriginalCapturado'] ?? d['ean'] ?? d['sku']}) • En espera de alta oficial en SAP',
-                                          style: const TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    if (d['enPromocion'] == true)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text('🏷️ EN PROMOCIÓN / SALDADO (${d['piezasEnPromocion'] ?? d['cantidad']} pzas) - Pendiente venta o baja', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                      ),
-                                    if (_filtroDescuadreSAP)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          '📊 Físico Tienda: ${sumaFisicaPorSku[(d['sku'] ?? '').toString()] ?? d['cantidad']} pzas  vs  SAP (OH): ${d['oh'] ?? 0} pzas',
-                                          style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    if (d['comentarioCorporativo'] != null)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          d['instruccionCorpEjecutada'] == true
-                                              ? '✅ CORP EJECUTADO (${d['motivoEjecucionCorp'] ?? 'Atendido'}) [${d['autorComentarioCorp'] ?? 'CORP'}]: ${d['comentarioCorporativo']}'
-                                              : '🏢 INSTRUCCIÓN (${d['autorComentarioCorp'] ?? 'CORP'}): ${d['comentarioCorporativo']}',
-                                          style: TextStyle(
-                                            color: d['instruccionCorpEjecutada'] == true ? Colors.greenAccent : Colors.pinkAccent,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      )
-                                  ],
-                                ),
-                              ),
-                              trailing: _modoSeleccion
-                                  ? Icon(isSelected ? Icons.check_circle : Icons.radio_button_unchecked, color: isSelected ? Colors.redAccent : Colors.white54)
-                                  : const Icon(Icons.info_outline, color: Colors.white54),
-                            ),
-                          );
-                        },
-                      ),
-                          ),
-                          Positioned(
-                            right: 1.5,
-                            top: 6,
-                            bottom: 6,
-                            width: 3.5,
-                            child: IgnorePointer(
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  double trackH = constraints.maxHeight;
-                                  double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
-                                  double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
-                                  double thumbTop = maxTop * _progresoScrollSabana.clamp(0.0, 1.0);
-                                  return Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.08),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Stack(
-                                      children: [
-                                        Positioned(
-                                          top: thumbTop,
-                                          left: 0,
-                                          right: 0,
-                                          height: thumbH,
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.amber.withOpacity(0.65),
-                                              borderRadius: BorderRadius.circular(4),
+                                    if (scrollInfo.metrics.maxScrollExtent > 0) {
+                                      double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
+                                      if ((p - _progresoScrollSabana.value).abs() > 0.015) {
+                                        _progresoScrollSabana.value = p;
+                                      }
+                                    }
+                                  }
+                                  return false;
+                                },
+                                child: ListView.builder(
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  cacheExtent: esZebra ? 220.0 : 500.0,
+                                  addRepaintBoundaries: true,
+                                  itemCount: docsFinales.length + (mostrarPestanaCargar50Mas ? 1 : 0),
+                                  itemBuilder: (context, i) {
+                                    if (i == docsFinales.length) {
+                                      int restantes = docsFiltrados.length - docsFinales.length;
+                                      int loteSiguiente = restantes < kPasoPaginacionLotes ? restantes : kPasoPaginacionLotes;
+                                      return Padding(
+                                        padding: const EdgeInsets.fromLTRB(14, 8, 14, 24),
+                                        child: SizedBox(
+                                          height: 46,
+                                          width: double.infinity,
+                                          child: ElevatedButton(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.amber,
+                                              foregroundColor: Colors.black,
+                                              elevation: 0,
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                            ),
+                                            onPressed: () {
+                                              setState(() {
+                                                _limiteLotesMostrados += kPasoPaginacionLotes;
+                                              });
+                                            },
+                                            child: Text(
+                                              'Cargar $loteSiguiente lotes más (Mostrando ${docsFinales.length} de ${docsFiltrados.length} en próx. 3 meses)',
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                              textAlign: TextAlign.center,
                                             ),
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  );
-                                },
+                                      );
+                                    }
+
+                                    var d = docsFinales[i].data() as Map<String, dynamic>;
+                                    String docId = docsFinales[i].id;
+                                    DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+                                    int dias = cad.difference(hoy).inDays;
+                                    Map<String, dynamic> etiqueta = EtiquetaMes.obtener(cad);
+                                    bool isSelected = _seleccionados.contains(docId);
+                                    String upcVisual = JerarquiaUbicacionHelper.obtenerUpcVisual(d);
+
+                                    Widget cardWidget = Card(
+                                      elevation: esZebra ? 0 : 1,
+                                      color: isSelected ? Colors.redAccent.withOpacity(0.2) : Colors.white10,
+                                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(15),
+                                        side: BorderSide(color: isSelected ? Colors.redAccent : Colors.white24, width: isSelected ? 2 : 1),
+                                      ),
+                                      child: ListTile(
+                                        contentPadding: const EdgeInsets.all(12),
+                                        onLongPress: () {
+                                          if (!_modoSeleccion) {
+                                            setState(() {
+                                              _modoSeleccion = true;
+                                              _seleccionados.add(docId);
+                                            });
+                                          }
+                                        },
+                                        onTap: () {
+                                          if (_modoSeleccion) {
+                                            setState(() {
+                                              if (isSelected) {
+                                                _seleccionados.remove(docId);
+                                                if (_seleccionados.isEmpty) _modoSeleccion = false;
+                                              } else {
+                                                _seleccionados.add(docId);
+                                              }
+                                            });
+                                          } else {
+                                            _verDetalleCompleto(docsFinales[i]);
+                                          }
+                                        },
+                                        leading: Container(
+                                          width: 45,
+                                          height: 45,
+                                          decoration: BoxDecoration(
+                                            color: etiqueta['color'].withOpacity(0.2),
+                                            shape: BoxShape.circle,
+                                            border: Border.all(color: etiqueta['color']),
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              dias.toString(),
+                                              style: TextStyle(color: etiqueta['color'], fontWeight: FontWeight.bold, fontSize: 14),
+                                            ),
+                                          ),
+                                        ),
+                                        title: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              d['descripcion'] ?? d['sku'],
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'SKU: ${d['sku'] ?? 'ND'}',
+                                              style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                            ),
+                                            Text(
+                                              'UPC: $upcVisual',
+                                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                                            ),
+                                          ],
+                                        ),
+                                        subtitle: Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '${d['cantidad']} pzas • Ubicación: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}',
+                                                style: const TextStyle(color: Colors.amberAccent, fontSize: 12),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                'Caducidad: ${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}',
+                                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                'Capturado: ${_formatearFechaCapturaLote(d)}',
+                                                style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                              ),
+                                              if (JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d) != null)
+                                                Padding(
+                                                  padding: const EdgeInsets.only(top: 4),
+                                                  child: Text(
+                                                    JerarquiaUbicacionHelper.analizarRiesgoSobrestockIA(d)!['detalle'].toString(),
+                                                    style: const TextStyle(color: Colors.deepOrangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ),
+                                              if (d['edicionTemporal'] == true)
+                                                Padding(
+                                                  padding: const EdgeInsets.only(top: 4),
+                                                  child: Text(
+                                                    '⏳ EDICIÓN TEMPORAL (Código orig: ${d['codigoOriginalCapturado'] ?? d['ean'] ?? d['sku']}) • En espera de alta oficial en SAP',
+                                                    style: const TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ),
+                                              if (d['enPromocion'] == true)
+                                                Padding(
+                                                  padding: const EdgeInsets.only(top: 4),
+                                                  child: Text(
+                                                    '🏷️ EN PROMOCIÓN / SALDADO (${d['piezasEnPromocion'] ?? d['cantidad']} pzas) - Pendiente venta o baja',
+                                                    style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ),
+                                              if (_filtroDescuadreSAP)
+                                                Padding(
+                                                  padding: const EdgeInsets.only(top: 4),
+                                                  child: Text(
+                                                    '📊 Físico Tienda: ${sumaFisicaPorSku[(d['sku'] ?? '').toString()] ?? d['cantidad']} pzas  vs  SAP (OH): ${d['oh'] ?? 0} pzas',
+                                                    style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ),
+                                              if (d['comentarioCorporativo'] != null)
+                                                Padding(
+                                                  padding: const EdgeInsets.only(top: 4),
+                                                  child: Text(
+                                                    d['instruccionCorpEjecutada'] == true
+                                                        ? '✅ CORP EJECUTADO (${d['motivoEjecucionCorp'] ?? 'Atendido'}) [${d['autorComentarioCorp'] ?? 'CORP'}]: ${d['comentarioCorporativo']}'
+                                                        : '🏢 INSTRUCCIÓN (${d['autorComentarioCorp'] ?? 'CORP'}): ${d['comentarioCorporativo']}',
+                                                    style: TextStyle(
+                                                      color: d['instruccionCorpEjecutada'] == true ? Colors.greenAccent : Colors.pinkAccent,
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        trailing: _modoSeleccion
+                                            ? Icon(
+                                                isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                                                color: isSelected ? Colors.redAccent : Colors.white54,
+                                              )
+                                            : const Icon(Icons.info_outline, color: Colors.white54),
+                                      ),
+                                    );
+
+                                    return esZebra ? RepaintBoundary(child: cardWidget) : cardWidget;
+                                  },
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
+                              Positioned(
+                                right: 1.5,
+                                top: 6,
+                                bottom: 6,
+                                width: 3.5,
+                                child: IgnorePointer(
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      double trackH = constraints.maxHeight;
+                                      double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
+                                      double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
+                                      return ValueListenableBuilder<double>(
+                                        valueListenable: _progresoScrollSabana,
+                                        builder: (context, prog, _) {
+                                          double thumbTop = maxTop * prog.clamp(0.0, 1.0);
+                                          return Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withOpacity(0.08),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Stack(
+                                              children: [
+                                                Positioned(
+                                                  top: thumbTop,
+                                                  left: 0,
+                                                  right: 0,
+                                                  height: thumbH,
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.amber.withOpacity(0.65),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
               ),
             ],
@@ -1906,18 +2081,18 @@ class PantallaEscanerRapido extends StatefulWidget {
 }
 
 class _PantallaEscanerRapidoState extends State<PantallaEscanerRapido> {
-  bool _yaEscaneado = false;
+  bool _detectado = false;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Escanear SKU / UPC para buscar', style: TextStyle(color: Colors.amber))),
+      appBar: AppBar(title: const Text('Escanear SKU o UPC', style: TextStyle(color: Colors.amber, fontSize: 16))),
       body: MobileScanner(
         onDetect: (capture) {
-          if (_yaEscaneado) return; 
+          if (_detectado) return;
           final barcode = capture.barcodes.first;
-          if (barcode.rawValue != null) {
-            setState(() => _yaEscaneado = true);
-            Navigator.pop(context, barcode.rawValue);
+          if (barcode.rawValue != null && barcode.rawValue!.trim().isNotEmpty) {
+            setState(() => _detectado = true);
+            Navigator.pop(context, barcode.rawValue!.trim());
           }
         },
       ),

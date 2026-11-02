@@ -20,7 +20,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   bool _actualizando = false;
   bool _verHistorial = false;
   bool _filtrosOcultosMisiones = false;
-  double _progresoScrollMisiones = 0.0;
+  final ValueNotifier<double> _progresoScrollMisiones = ValueNotifier<double>(0.0);
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
   int? _filtroTipoMision;
@@ -50,6 +50,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   @override
   void dispose() {
     _busquedaMisionCtrl.dispose();
+    _progresoScrollMisiones.dispose();
     super.dispose();
   }
 
@@ -1720,8 +1721,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                         }
                                         if (scrollInfo.metrics.maxScrollExtent > 0) {
                                           double p = (scrollInfo.metrics.pixels / scrollInfo.metrics.maxScrollExtent).clamp(0.0, 1.0);
-                                          if ((p - _progresoScrollMisiones).abs() > 0.01) {
-                                            setState(() => _progresoScrollMisiones = p);
+                                          if ((p - _progresoScrollMisiones.value).abs() > 0.015) {
+                                            _progresoScrollMisiones.value = p;
                                           }
                                         }
                                       }
@@ -1807,28 +1808,33 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                           double trackH = constraints.maxHeight;
                                           double thumbH = (trackH * 0.18).clamp(24.0, 60.0);
                                           double maxTop = (trackH - thumbH).clamp(0.0, double.infinity);
-                                          double thumbTop = maxTop * _progresoScrollMisiones.clamp(0.0, 1.0);
-                                          return Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.white.withOpacity(0.08),
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: Stack(
-                                              children: [
-                                                Positioned(
-                                                  top: thumbTop,
-                                                  left: 0,
-                                                  right: 0,
-                                                  height: thumbH,
-                                                  child: Container(
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.amber.withOpacity(0.65),
-                                                      borderRadius: BorderRadius.circular(4),
-                                                    ),
-                                                  ),
+                                          return ValueListenableBuilder<double>(
+                                            valueListenable: _progresoScrollMisiones,
+                                            builder: (context, prog, _) {
+                                              double thumbTop = maxTop * prog.clamp(0.0, 1.0);
+                                              return Container(
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white.withOpacity(0.08),
+                                                  borderRadius: BorderRadius.circular(4),
                                                 ),
-                                              ],
-                                            ),
+                                                child: Stack(
+                                                  children: [
+                                                    Positioned(
+                                                      top: thumbTop,
+                                                      left: 0,
+                                                      right: 0,
+                                                      height: thumbH,
+                                                      child: Container(
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.amber.withOpacity(0.65),
+                                                          borderRadius: BorderRadius.circular(4),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            },
                                           );
                                         },
                                       ),

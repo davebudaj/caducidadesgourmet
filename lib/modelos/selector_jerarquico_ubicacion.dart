@@ -1,7 +1,24 @@
+import 'package:universal_html/html.dart' as html;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class JerarquiaUbicacionHelper {
+  static bool? _esZebraCache;
+  static bool get esDispositivoZebra {
+    if (_esZebraCache != null) return _esZebraCache!;
+    try {
+      String ua = html.window.navigator.userAgent.toUpperCase();
+      _esZebraCache = ua.contains('TC21') ||
+          ua.contains('TC26') ||
+          ua.contains('TC5') ||
+          ua.contains('ZEBRA') ||
+          ua.contains('SYMBOL') ||
+          ua.contains('MC33');
+    } catch (_) {
+      _esZebraCache = false;
+    }
+    return _esZebraCache!;
+  }
   static final Map<String, String> _cacheUpcPorSku = {};
   static bool _cargandoCacheUpc = false;
   static bool _cacheUpcListo = false;
