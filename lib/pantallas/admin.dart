@@ -1626,27 +1626,63 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Centro de Mando', style: TextStyle(fontSize: 16)), 
+        leadingWidth: 78,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 6.0, top: 9.0, bottom: 9.0),
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.cyanAccent,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: const Icon(Icons.system_update_alt_rounded, size: 14),
+            label: const Text('ACT.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+            onPressed: _forzarActualizacionAppWeb,
+          ),
+        ),
+        titleSpacing: 4,
+        centerTitle: true,
+        title: const Text(
+          'Centro de Mando',
+          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+            padding: const EdgeInsets.symmetric(vertical: 9.0, horizontal: 3.0),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
-              icon: const Icon(Icons.cloud_download, size: 16), 
-              label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
-              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank'); } 
-            )
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+              ),
+              icon: const Icon(Icons.cloud_download, size: 14),
+              label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+              onPressed: () {
+                html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank');
+              },
+            ),
           ),
           Padding(
-            padding: const EdgeInsets.only(top: 8.0, bottom: 8.0, right: 8.0),
+            padding: const EdgeInsets.only(top: 9.0, bottom: 9.0, right: 6.0),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
-              icon: const Icon(Icons.point_of_sale, size: 16), 
-              label: const Text('SAP VENTAS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
-              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank'); } 
-            )
-          )
-        ]
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.greenAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+              ),
+              icon: const Icon(Icons.point_of_sale, size: 14),
+              label: const Text('SAP VNTS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+              onPressed: () {
+                html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank');
+              },
+            ),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Padding(
@@ -1657,43 +1693,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
               const SizedBox(height: 20),
               if (_procesando) const CircularProgressIndicator(color: Colors.amber) else Column(children: [
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 18),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.10),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.amber, width: 1.5),
-                  ),
-                  child: Column(
-                    children: [
-                      SizedBox(
-                        height: 46,
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amber,
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          icon: const Icon(Icons.system_update_alt_rounded, size: 20),
-                          label: const Text(
-                            'ACTUALIZAR APP (CARGAR NUEVA VERSIÓN)',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                          ),
-                          onPressed: _forzarActualizacionAppWeb,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      const Text(
-                        'Limpia la caché del navegador y descarga al instante la última actualización publicada.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 10, color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.only(bottom: 10),

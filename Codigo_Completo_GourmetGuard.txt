@@ -1,6 +1,6 @@
 ====================================================================
 RESPALDO DE CÓDIGO FUENTE - GOURMET GUARD
-Generado: 03/11/2026 17:06:01
+Generado: 03/11/2026 21:03:58
 ====================================================================
 
 ====================================================================
@@ -2944,27 +2944,63 @@ class _PantallaAdminState extends State<PantallaAdmin> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Centro de Mando', style: TextStyle(fontSize: 16)), 
+        leadingWidth: 78,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 6.0, top: 9.0, bottom: 9.0),
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.cyanAccent,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: const Icon(Icons.system_update_alt_rounded, size: 14),
+            label: const Text('ACT.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+            onPressed: _forzarActualizacionAppWeb,
+          ),
+        ),
+        titleSpacing: 4,
+        centerTitle: true,
+        title: const Text(
+          'Centro de Mando',
+          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+            padding: const EdgeInsets.symmetric(vertical: 9.0, horizontal: 3.0),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
-              icon: const Icon(Icons.cloud_download, size: 16), 
-              label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
-              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank'); } 
-            )
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+              ),
+              icon: const Icon(Icons.cloud_download, size: 14),
+              label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+              onPressed: () {
+                html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank');
+              },
+            ),
           ),
           Padding(
-            padding: const EdgeInsets.only(top: 8.0, bottom: 8.0, right: 8.0),
+            padding: const EdgeInsets.only(top: 9.0, bottom: 9.0, right: 6.0),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10)), 
-              icon: const Icon(Icons.point_of_sale, size: 16), 
-              label: const Text('SAP VENTAS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), 
-              onPressed: () { html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank'); } 
-            )
-          )
-        ]
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.greenAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+              ),
+              icon: const Icon(Icons.point_of_sale, size: 14),
+              label: const Text('SAP VNTS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+              onPressed: () {
+                html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank');
+              },
+            ),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Padding(
@@ -2975,43 +3011,6 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
               const SizedBox(height: 20),
               if (_procesando) const CircularProgressIndicator(color: Colors.amber) else Column(children: [
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 18),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.10),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.amber, width: 1.5),
-                  ),
-                  child: Column(
-                    children: [
-                      SizedBox(
-                        height: 46,
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amber,
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          icon: const Icon(Icons.system_update_alt_rounded, size: 20),
-                          label: const Text(
-                            'ACTUALIZAR APP (CARGAR NUEVA VERSIÓN)',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                          ),
-                          onPressed: _forzarActualizacionAppWeb,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      const Text(
-                        'Limpia la caché del navegador y descarga al instante la última actualización publicada.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 10, color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.only(bottom: 10),
@@ -11620,6 +11619,7 @@ class _PantallaEscanerRapidoState extends State<PantallaEscanerRapido> {
 ARCHIVO: lib/pantallas/trasvase_pantallas.dart
 ====================================================================
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../modelos/selector_jerarquico_ubicacion.dart';
@@ -11648,7 +11648,13 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
   final TextEditingController _skuCtrl = TextEditingController();
   final FocusNode _skuFocusNode = FocusNode();
 
-  String _filtroTextoSku = '';
+  // Controla si el teclado virtual del teléfono debe mostrarse (Solo se activa con Doble Toque)
+  bool _tecladoManualActivo = false;
+  DateTime? _ultimoToqueBuscador;
+
+  // Lista de SKUs escaneados en la sesión actual (la lista inicia vacía para ahorrar RAM)
+  final List<String> _skusEscaneados = [];
+  String _filtroTextoEnVivo = '';
   String? _ubicacionOrigenFiltro;
   final Map<String, int> _cantidadesElegidas = {};
   bool _procesandoEnvio = false;
@@ -11668,17 +11674,14 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
     JerarquiaUbicacionHelper.precargarCacheUpc();
     _ubicacionOrigenFiltro = widget.ubicacionInicial;
     if (widget.skuFiltroInicial != null && widget.skuFiltroInicial!.trim().isNotEmpty) {
-      _skuCtrl.text = widget.skuFiltroInicial!.trim();
-      _filtroTextoSku = widget.skuFiltroInicial!.trim().toLowerCase();
+      _skusEscaneados.add(widget.skuFiltroInicial!.trim().toLowerCase());
     }
     _invStream = _refInv.orderBy('fechaCaducidad').snapshots();
     _ubiStream = _refUbi.orderBy('nombre').snapshots();
 
-    // Al entrar a Trasvase Masivo, enfocar automáticamente el cuadro de SKU / UPC
+    // Enfocar el cuadro de escaneo al entrar SIN abrir el teclado virtual
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _skuFocusNode.requestFocus();
-      }
+      _enfocarSinTeclado();
     });
   }
 
@@ -11689,21 +11692,51 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
     super.dispose();
   }
 
+  void _enfocarSinTeclado() {
+    if (!mounted) return;
+    setState(() => _tecladoManualActivo = false);
+    _skuFocusNode.requestFocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
+  void _activarTecladoPorDobleToque() {
+    if (!mounted) return;
+    setState(() => _tecladoManualActivo = true);
+    _skuFocusNode.unfocus();
+    Future.delayed(const Duration(milliseconds: 60), () {
+      if (!mounted) return;
+      _skuFocusNode.requestFocus();
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    });
+  }
+
+  void _manejarToqueCuadroBusqueda() {
+    DateTime ahora = DateTime.now();
+    if (_ultimoToqueBuscador != null &&
+        ahora.difference(_ultimoToqueBuscador!).inMilliseconds < 420) {
+      _ultimoToqueBuscador = null;
+      _activarTecladoPorDobleToque();
+    } else {
+      _ultimoToqueBuscador = ahora;
+      if (!_tecladoManualActivo) {
+        _skuFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    }
+  }
+
   Future<void> _procesarCodigoEscaneado(String rawCode) async {
     String limpio = rawCode.trim();
-    if (limpio.isEmpty) {
-      setState(() => _filtroTextoSku = '');
-      return;
-    }
+    if (limpio.isEmpty) return;
 
     if (limpio.startsWith('LOC:')) {
       String ubi = limpio.substring(4).trim();
       setState(() {
         _ubicacionOrigenFiltro = ubi;
         _skuCtrl.clear();
-        _filtroTextoSku = '';
+        _filtroTextoEnVivo = '';
       });
-      _skuFocusNode.requestFocus();
+      _enfocarSinTeclado();
       return;
     }
 
@@ -11713,22 +11746,28 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
         : limpio;
 
     if (!mounted) return;
+    String skuLower = skuTraducido.toLowerCase();
     setState(() {
-      _skuCtrl.text = skuTraducido;
-      _filtroTextoSku = skuTraducido.toLowerCase();
+      if (!_skusEscaneados.contains(skuLower)) {
+        _skusEscaneados.insert(0, skuLower);
+      }
+      _skuCtrl.clear();
+      _filtroTextoEnVivo = '';
+      _tecladoManualActivo = false;
     });
 
-    // Seleccionar todo el texto para que el siguiente disparo de láser lo reemplace o permita seguir escaneando
-    _skuCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _skuCtrl.text.length);
+    _enfocarSinTeclado();
   }
 
-  void _limpiarParaSiguienteSku() {
+  void _limpiarListaYSiguienteSku() {
     setState(() {
       _skuCtrl.clear();
-      _filtroTextoSku = '';
+      _filtroTextoEnVivo = '';
+      _skusEscaneados.clear();
       _cantidadesElegidas.clear();
+      _tecladoManualActivo = false;
     });
-    _skuFocusNode.requestFocus();
+    _enfocarSinTeclado();
   }
 
   Future<int?> _pedirCantidadManual(int actual, int maximo, String desc) async {
@@ -11810,23 +11849,22 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
 
       if (!mounted) return;
 
-      // Auto-limpiar el SKU/UPC y las cantidades después de enviar al carrito temporal,
-      // y devolver el foco al cuadro de escaneo para escanear el siguiente SKU de inmediato
+      // Limpiar automáticamente la lista después de mandar al carrito para dar paso al siguiente SKU
       setState(() {
         _procesandoEnvio = false;
         _cantidadesElegidas.clear();
-        if (_filtroTextoSku.isNotEmpty) {
-          _skuCtrl.clear();
-          _filtroTextoSku = '';
-        }
+        _skusEscaneados.clear();
+        _skuCtrl.clear();
+        _filtroTextoEnVivo = '';
+        _tecladoManualActivo = false;
       });
 
-      _skuFocusNode.requestFocus();
+      _enfocarSinTeclado();
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '🛒 $totalPiezas pza(s) enviadas al Carrito Temporal. Listo para escanear el siguiente SKU.',
+            '🛒 $totalPiezas pza(s) enviadas al Carrito Temporal. Lista limpia para el siguiente SKU.',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           backgroundColor: Colors.green.shade700,
@@ -11843,8 +11881,36 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
     }
   }
 
+  bool _coincideConSkusEscaneadosOTexto(Map<String, dynamic> d) {
+    List<String?> campos = [
+      d['sku']?.toString(),
+      d['ean']?.toString(),
+      JerarquiaUbicacionHelper.obtenerUpcVisual(d),
+      d['codigoOriginalCapturado']?.toString(),
+      d['descripcion']?.toString(),
+    ];
+
+    if (_filtroTextoEnVivo.isNotEmpty) {
+      if (JerarquiaUbicacionHelper.coincideBusquedaInteligente(_filtroTextoEnVivo, campos)) {
+        return true;
+      }
+    }
+
+    for (String skuBuscado in _skusEscaneados) {
+      if (JerarquiaUbicacionHelper.coincideBusquedaInteligente(skuBuscado, campos)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
+    // La lista permanece vacía (ahorrando RAM) hasta que el usuario escanee al menos un SKU/UPC o elija un mueble origen
+    bool tieneCriterioDeCarga = _skusEscaneados.isNotEmpty ||
+        _filtroTextoEnVivo.isNotEmpty ||
+        _ubicacionOrigenFiltro != null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Trasvase Masivo (Extraer)', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
@@ -11873,7 +11939,7 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                         ),
                       ),
                     );
-                    if (mounted) _skuFocusNode.requestFocus();
+                    _enfocarSinTeclado();
                   },
                 ),
               );
@@ -11903,32 +11969,17 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
               ? JerarquiaUbicacionHelper.descomponerRuta(_ubicacionOrigenFiltro!)
               : [];
 
-          var docsFiltrados = docsActivos.where((doc) {
-            var d = doc.data() as Map<String, dynamic>;
-            String u = (d['ubicacion'] ?? 'ND').toString();
-            bool okUbi = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(u, prefijoOrigen);
-            bool okSku = _filtroTextoSku.isEmpty ||
-                JerarquiaUbicacionHelper.coincideBusquedaInteligente(
-                  _filtroTextoSku,
-                  [
-                    d['sku']?.toString(),
-                    d['ean']?.toString(),
-                    JerarquiaUbicacionHelper.obtenerUpcVisual(d),
-                    d['codigoOriginalCapturado']?.toString(),
-                    d['descripcion']?.toString(),
-                  ],
-                );
-            return okUbi && okSku;
-          }).toList();
-
-          int totalLotesSeleccionados = 0;
-          int totalPiezasSeleccionadas = 0;
-          for (var doc in docsFiltrados) {
-            int c = _cantidadesElegidas[doc.id] ?? 0;
-            if (c > 0) {
-              totalLotesSeleccionados++;
-              totalPiezasSeleccionadas += c;
-            }
+          // Si no se ha escaneado nada ni elegido mueble, dejamos la lista vacía para no renderizar cientos de tarjetas en RAM
+          List<QueryDocumentSnapshot> docsFiltrados = [];
+          if (tieneCriterioDeCarga) {
+            docsFiltrados = docsActivos.where((doc) {
+              var d = doc.data() as Map<String, dynamic>;
+              String u = (d['ubicacion'] ?? 'ND').toString();
+              bool okUbi = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(u, prefijoOrigen);
+              bool hayFiltroSku = _skusEscaneados.isNotEmpty || _filtroTextoEnVivo.isNotEmpty;
+              bool okSku = !hayFiltroSku || _coincideConSkusEscaneadosOTexto(d);
+              return okUbi && okSku;
+            }).toList();
           }
 
           return Column(
@@ -11939,54 +11990,65 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // CUADRO DE INGRESO ACTIVO POR DEFECTO PARA ESCANEAR SKU / UPC
                     Row(
                       children: [
                         Expanded(
-                          child: SizedBox(
-                            height: 44,
-                            child: TextField(
-                              controller: _skuCtrl,
-                              focusNode: _skuFocusNode,
-                              autofocus: true,
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                              decoration: InputDecoration(
-                                labelText: 'Escanear SKU o UPC (Activo para escáner)...',
-                                labelStyle: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                prefixIcon: const Icon(Icons.qr_code_scanner, color: Colors.cyanAccent, size: 20),
-                                suffixIcon: IconButton(
-                                  icon: const Icon(Icons.camera_alt, color: Colors.amber, size: 18),
-                                  tooltip: 'Escanear con cámara',
-                                  onPressed: () async {
-                                    String? code = await Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (_) => const _EscanerCamaraAuxiliar()),
-                                    );
-                                    if (code != null && code.trim().isNotEmpty) {
-                                      await _procesarCodigoEscaneado(code);
-                                    }
-                                  },
+                          child: GestureDetector(
+                            onDoubleTap: _activarTecladoPorDobleToque,
+                            child: SizedBox(
+                              height: 44,
+                              child: TextField(
+                                controller: _skuCtrl,
+                                focusNode: _skuFocusNode,
+                                autofocus: true,
+                                readOnly: false,
+                                showCursor: true,
+                                keyboardType: _tecladoManualActivo ? TextInputType.text : TextInputType.none,
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                                onTap: _manejarToqueCuadroBusqueda,
+                                decoration: InputDecoration(
+                                  labelText: _tecladoManualActivo
+                                      ? 'Teclado activo (Escribe SKU o UPC)...'
+                                      : 'Escanear SKU o UPC (Doble toque para teclado)...',
+                                  labelStyle: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                  prefixIcon: const Icon(Icons.qr_code_scanner, color: Colors.cyanAccent, size: 20),
+                                  suffixIcon: IconButton(
+                                    icon: const Icon(Icons.camera_alt, color: Colors.amber, size: 18),
+                                    tooltip: 'Escanear con cámara',
+                                    onPressed: () async {
+                                      String? code = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (_) => const _EscanerCamaraAuxiliar()),
+                                      );
+                                      if (code != null && code.trim().isNotEmpty) {
+                                        await _procesarCodigoEscaneado(code);
+                                      }
+                                    },
+                                  ),
+                                  filled: true,
+                                  fillColor: Colors.blueAccent.withOpacity(0.12),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(color: Colors.cyanAccent, width: 1.5),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(color: Colors.amber, width: 2),
+                                  ),
                                 ),
-                                filled: true,
-                                fillColor: Colors.blueAccent.withOpacity(0.12),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: const BorderSide(color: Colors.cyanAccent, width: 1.5),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: const BorderSide(color: Colors.amber, width: 2),
-                                ),
+                                onChanged: (val) {
+                                  if (!_tecladoManualActivo) {
+                                    SystemChannels.textInput.invokeMethod('TextInput.hide');
+                                  }
+                                  setState(() => _filtroTextoEnVivo = val.trim().toLowerCase());
+                                },
+                                onSubmitted: (val) => _procesarCodigoEscaneado(val),
                               ),
-                              onChanged: (val) {
-                                setState(() => _filtroTextoSku = val.trim().toLowerCase());
-                              },
-                              onSubmitted: (val) => _procesarCodigoEscaneado(val),
                             ),
                           ),
                         ),
-                        if (_filtroTextoSku.isNotEmpty || _cantidadesElegidas.isNotEmpty) ...[
+                        if (tieneCriterioDeCarga || _cantidadesElegidas.isNotEmpty) ...[
                           const SizedBox(width: 6),
                           SizedBox(
                             height: 44,
@@ -11999,12 +12061,39 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                               ),
                               icon: const Icon(Icons.cleaning_services_rounded, size: 16),
                               label: const Text('Limpiar', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                              onPressed: _limpiarParaSiguienteSku,
+                              onPressed: _limpiarListaYSiguienteSku,
                             ),
                           ),
                         ],
                       ],
                     ),
+                    if (_skusEscaneados.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        height: 28,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _skusEscaneados.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 6),
+                          itemBuilder: (context, idx) {
+                            String skuItem = _skusEscaneados[idx];
+                            return Chip(
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              labelPadding: const EdgeInsets.only(left: 8, right: 4),
+                              backgroundColor: Colors.cyanAccent.withOpacity(0.18),
+                              side: const BorderSide(color: Colors.cyanAccent),
+                              label: Text('SKU: ${skuItem.toUpperCase()}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
+                              deleteIcon: const Icon(Icons.close, size: 14, color: Colors.redAccent),
+                              onDeleted: () {
+                                setState(() => _skusEscaneados.removeAt(idx));
+                                _enfocarSinTeclado();
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     StreamBuilder<QuerySnapshot>(
                       stream: _ubiStream,
@@ -12020,9 +12109,12 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                                 todasLasRutas: rutas,
                                 rutaSeleccionada: _ubicacionOrigenFiltro,
                                 permitirSeleccionParcial: true,
-                                textoRaizVacio: '📍 Filtrar Mueble Origen (Opcional: Todos)',
+                                textoRaizVacio: '📍 Filtrar Mueble Origen (Opcional)',
                                 conteoLotesPorRuta: conteoPorRuta,
-                                onRutaCambiada: (val) => setState(() => _ubicacionOrigenFiltro = val),
+                                onRutaCambiada: (val) {
+                                  setState(() => _ubicacionOrigenFiltro = val);
+                                  _enfocarSinTeclado();
+                                },
                               ),
                             ),
                             if (_ubicacionOrigenFiltro != null)
@@ -12031,7 +12123,7 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                                 tooltip: 'Quitar filtro de ubicación',
                                 onPressed: () {
                                   setState(() => _ubicacionOrigenFiltro = null);
-                                  _skuFocusNode.requestFocus();
+                                  _enfocarSinTeclado();
                                 },
                               ),
                           ],
@@ -12045,7 +12137,7 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
-                              'Mostrando ${docsFiltrados.length} lote(s) disponible(s)',
+                              'Mostrando ${docsFiltrados.length} lote(s) del SKU escaneado',
                               style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
                             ),
                             Row(
@@ -12077,164 +12169,173 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
                 ),
               ),
               Expanded(
-                child: docsFiltrados.isEmpty
-                    ? Center(
+                child: !tieneCriterioDeCarga
+                    ? const Center(
                         child: Padding(
-                          padding: const EdgeInsets.all(24.0),
+                          padding: EdgeInsets.all(28.0),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const Icon(Icons.qr_code_scanner, size: 46, color: Colors.white24),
-                              const SizedBox(height: 10),
+                              Icon(Icons.qr_code_scanner_rounded, size: 52, color: Colors.white24),
+                              SizedBox(height: 12),
                               Text(
-                                _filtroTextoSku.isNotEmpty
-                                    ? 'No se encontraron lotes activos para "$_filtroTextoSku".\nEscanea el siguiente SKU / UPC.'
-                                    : 'Escanea un SKU / UPC arriba o selecciona un mueble para extraer mercancía al Carrito Temporal.',
+                                'Lista en espera para ahorrar memoria RAM.\nEscanea un SKU o UPC para mostrar sus lotes y ubicaciones.',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.white54, fontSize: 13),
+                                style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w500),
                               ),
                             ],
                           ),
                         ),
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 85, top: 6),
-                        itemCount: docsFiltrados.length,
-                        itemBuilder: (context, i) {
-                          var doc = docsFiltrados[i];
-                          var d = doc.data() as Map<String, dynamic>;
-                          String docId = doc.id;
-                          int maxDisp = (d['cantidad'] ?? 0) as int;
-                          int cantElegida = _cantidadesElegidas[docId] ?? 0;
-                          bool activo = cantElegida > 0;
-
-                          DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
-                          int dias = cad.difference(DateTime.now()).inDays;
-                          String fCad = "${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}";
-                          String upc = JerarquiaUbicacionHelper.obtenerUpcVisual(d);
-
-                          return Card(
-                            elevation: 0,
-                            color: activo ? Colors.blueAccent.withOpacity(0.20) : Colors.white10,
-                            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: activo ? Colors.cyanAccent : Colors.white24, width: activo ? 1.8 : 1),
-                            ),
+                    : docsFiltrados.isEmpty
+                        ? const Center(
                             child: Padding(
-                              padding: const EdgeInsets.all(10.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Checkbox(
-                                        visualDensity: VisualDensity.compact,
-                                        activeColor: Colors.cyanAccent,
-                                        checkColor: Colors.black,
-                                        value: activo,
-                                        onChanged: (v) {
-                                          setState(() {
-                                            _cantidadesElegidas[docId] = (v == true) ? maxDisp : 0;
-                                          });
-                                        },
-                                      ),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              d['descripcion'] ?? d['sku'],
-                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text('SKU: ${d['sku'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                            Text('UPC: $upc', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
-                                            const SizedBox(height: 3),
-                                            Text(
-                                              '📍 Origen: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}',
-                                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                            ),
-                                            Text(
-                                              'Caducidad: $fCad ($dias d)  •  Disponible: $maxDisp pzas',
-                                              style: TextStyle(color: dias <= 15 ? Colors.redAccent : Colors.white70, fontSize: 11),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      InkWell(
-                                        onTap: () => setState(() => _cantidadesElegidas[docId] = maxDisp),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: cantElegida == maxDisp ? Colors.amber : Colors.amber.withOpacity(0.15),
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: Colors.amber),
-                                          ),
-                                          child: Text(
-                                            'TODO ($maxDisp)',
-                                            style: TextStyle(
-                                              color: cantElegida == maxDisp ? Colors.black : Colors.amber,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 24),
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(),
-                                        onPressed: cantElegida > 0
-                                            ? () => setState(() => _cantidadesElegidas[docId] = cantElegida - 1)
-                                            : null,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      InkWell(
-                                        onTap: () async {
-                                          int? manual = await _pedirCantidadManual(cantElegida, maxDisp, (d['descripcion'] ?? '').toString());
-                                          if (manual != null) {
-                                            setState(() => _cantidadesElegidas[docId] = manual);
-                                          }
-                                        },
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: Colors.black54,
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: Colors.white24),
-                                          ),
-                                          child: Text(
-                                            '$cantElegida',
-                                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 24),
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(),
-                                        onPressed: cantElegida < maxDisp
-                                            ? () => setState(() => _cantidadesElegidas[docId] = cantElegida + 1)
-                                            : null,
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                              padding: EdgeInsets.all(24.0),
+                              child: Text(
+                                'No se encontraron lotes activos para el SKU escaneado.\nEscanea otro código o toca "Limpiar".',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.white54, fontSize: 13),
                               ),
                             ),
-                          );
-                        },
-                      ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.only(bottom: 85, top: 6),
+                            itemCount: docsFiltrados.length,
+                            itemBuilder: (context, i) {
+                              var doc = docsFiltrados[i];
+                              var d = doc.data() as Map<String, dynamic>;
+                              String docId = doc.id;
+                              int maxDisp = (d['cantidad'] ?? 0) as int;
+                              int cantElegida = _cantidadesElegidas[docId] ?? 0;
+                              bool activo = cantElegida > 0;
+
+                              DateTime cad = (d['fechaCaducidad'] as Timestamp).toDate();
+                              int dias = cad.difference(DateTime.now()).inDays;
+                              String fCad = "${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}";
+                              String upc = JerarquiaUbicacionHelper.obtenerUpcVisual(d);
+
+                              return Card(
+                                elevation: 0,
+                                color: activo ? Colors.blueAccent.withOpacity(0.20) : Colors.white10,
+                                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  side: BorderSide(color: activo ? Colors.cyanAccent : Colors.white24, width: activo ? 1.8 : 1),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(10.0),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Checkbox(
+                                            visualDensity: VisualDensity.compact,
+                                            activeColor: Colors.cyanAccent,
+                                            checkColor: Colors.black,
+                                            value: activo,
+                                            onChanged: (v) {
+                                              setState(() {
+                                                _cantidadesElegidas[docId] = (v == true) ? maxDisp : 0;
+                                              });
+                                            },
+                                          ),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  d['descripcion'] ?? d['sku'],
+                                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+                                                ),
+                                                const SizedBox(height: 2),
+                                                Text('SKU: ${d['sku'] ?? 'ND'}', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                                Text('UPC: $upc', style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                                                const SizedBox(height: 3),
+                                                Text(
+                                                  '📍 Origen: ${JerarquiaUbicacionHelper.formatearRutaVisual(d['ubicacion']?.toString())}',
+                                                  style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                ),
+                                                Text(
+                                                  'Caducidad: $fCad ($dias d)  •  Disponible: $maxDisp pzas',
+                                                  style: TextStyle(color: dias <= 15 ? Colors.redAccent : Colors.white70, fontSize: 11),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.end,
+                                        children: [
+                                          InkWell(
+                                            onTap: () => setState(() => _cantidadesElegidas[docId] = maxDisp),
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: cantElegida == maxDisp ? Colors.amber : Colors.amber.withOpacity(0.15),
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border.all(color: Colors.amber),
+                                              ),
+                                              child: Text(
+                                                'TODO ($maxDisp)',
+                                                style: TextStyle(
+                                                  color: cantElegida == maxDisp ? Colors.black : Colors.amber,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          IconButton(
+                                            icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 24),
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                            onPressed: cantElegida > 0
+                                                ? () => setState(() => _cantidadesElegidas[docId] = cantElegida - 1)
+                                                : null,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          InkWell(
+                                            onTap: () async {
+                                              int? manual = await _pedirCantidadManual(cantElegida, maxDisp, (d['descripcion'] ?? '').toString());
+                                              if (manual != null) {
+                                                setState(() => _cantidadesElegidas[docId] = manual);
+                                              }
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black54,
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border.all(color: Colors.white24),
+                                              ),
+                                              child: Text(
+                                                '$cantElegida',
+                                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          IconButton(
+                                            icon: const Icon(Icons.add_circle_outline, color: Colors.greenAccent, size: 24),
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                            onPressed: cantElegida < maxDisp
+                                                ? () => setState(() => _cantidadesElegidas[docId] = cantElegida + 1)
+                                                : null,
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
               ),
             ],
           );
@@ -12243,7 +12344,7 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
       bottomNavigationBar: StreamBuilder<QuerySnapshot>(
         stream: _invStream,
         builder: (context, invSnap) {
-          if (!invSnap.hasData) return const SizedBox.shrink();
+          if (!invSnap.hasData || !tieneCriterioDeCarga) return const SizedBox.shrink();
           var docsActivos = invSnap.data!.docs.where((doc) {
             var d = doc.data() as Map<String, dynamic>;
             String u = (d['ubicacion'] ?? '').toString();
@@ -12259,17 +12360,8 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
             var d = doc.data() as Map<String, dynamic>;
             String u = (d['ubicacion'] ?? 'ND').toString();
             bool okUbi = JerarquiaUbicacionHelper.coincideConPrefijoJerarquico(u, prefijoOrigen);
-            bool okSku = _filtroTextoSku.isEmpty ||
-                JerarquiaUbicacionHelper.coincideBusquedaInteligente(
-                  _filtroTextoSku,
-                  [
-                    d['sku']?.toString(),
-                    d['ean']?.toString(),
-                    JerarquiaUbicacionHelper.obtenerUpcVisual(d),
-                    d['codigoOriginalCapturado']?.toString(),
-                    d['descripcion']?.toString(),
-                  ],
-                );
+            bool hayFiltroSku = _skusEscaneados.isNotEmpty || _filtroTextoEnVivo.isNotEmpty;
+            bool okSku = !hayFiltroSku || _coincideConSkusEscaneadosOTexto(d);
             return okUbi && okSku;
           }).toList();
 
