@@ -1392,23 +1392,24 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                           ),
                         )
                       else
-                        GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onVerticalDragEnd: (details) {
-                            if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
-                              setState(() => _filtrosOcultosMisiones = true);
-                            }
-                          },
-                          child: Container(
-                            constraints: BoxConstraints(
-                              maxHeight: MediaQuery.of(context).size.height * 0.42,
-                            ),
-                            color: Colors.black,
-                            padding: const EdgeInsets.fromLTRB(14, 2, 14, 6),
-                            child: SingleChildScrollView(
+                        Expanded(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onVerticalDragEnd: (details) {
+                              if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
+                                setState(() => _filtrosOcultosMisiones = true);
+                              }
+                            },
+                            child: Container(
+                              color: Colors.black,
+                              padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
                               child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  Expanded(
+                                    child: SingleChildScrollView(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
 
                               if (_verHistorial) ...[
                                 Row(
@@ -1625,63 +1626,73 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 conteoLotesPorRuta: conteoPorUbicacionMision,
                                 onRutaCambiada: (v) => setState(() => _filtroMuebleMision = v),
                               ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  if (hayFiltrosActivos) ...[
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: Colors.redAccent,
-                                          side: const BorderSide(color: Colors.redAccent),
-                                          padding: const EdgeInsets.symmetric(vertical: 6),
-                                        ),
-                                        icon: const Icon(Icons.filter_alt_off, size: 16),
-                                        label: const Text('Limpiar Filtros', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                                        onPressed: () => setState(() {
-                                          _filtroProveedorMision = null;
-                                          _filtroMuebleMision = null;
-                                          _filtroTipoMision = null;
-                                          _anioFiltroHistMision = hoy.year;
-                                          _mesFiltroHistMision = hoy.month;
-                                          _semanaFiltroHistMision = null;
-                                        }),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                  ],
-                                  Expanded(
-                                    flex: 2,
-                                    child: InkWell(
-                                      onTap: () => setState(() => _filtrosOcultosMisiones = true),
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: Colors.amber.withOpacity(0.12),
-                                          borderRadius: BorderRadius.circular(10),
-                                          border: Border.all(color: Colors.amber.withOpacity(0.4)),
-                                        ),
-                                        child: const Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                                            SizedBox(width: 4),
-                                            Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
-                                          ],
-                                        ),
+                                        ],
                                       ),
                                     ),
                                   ),
-                                ],
-                              ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      if (hayFiltrosActivos) ...[
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.redAccent,
+                                              side: const BorderSide(color: Colors.redAccent),
+                                              padding: const EdgeInsets.symmetric(vertical: 10),
+                                            ),
+                                            icon: const Icon(Icons.filter_alt_off, size: 16),
+                                            label: const Text('Limpiar', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                            onPressed: () => setState(() {
+                                              _busquedaMisionCtrl.clear();
+                                              _busquedaMision = '';
+                                              _filtroProveedorMision = null;
+                                              _filtroMuebleMision = null;
+                                              _filtroTipoMision = null;
+                                              _anioFiltroHistMision = hoy.year;
+                                              _mesFiltroHistMision = hoy.month;
+                                              _semanaFiltroHistMision = null;
+                                            }),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                      ],
+                                      Expanded(
+                                        flex: 2,
+                                        child: InkWell(
+                                          onTap: () => setState(() => _filtrosOcultosMisiones = true),
+                                          borderRadius: BorderRadius.circular(12),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(vertical: 10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.amber.withOpacity(0.16),
+                                              borderRadius: BorderRadius.circular(10),
+                                              border: Border.all(color: Colors.amber, width: 1.2),
+                                            ),
+                                            child: Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 20),
+                                                const SizedBox(width: 6),
+                                                Text(
+                                                  'Subir / Ocultar Filtros (Ver ${lista.length})',
+                                                  style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
                               ),
                             ),
                           ),
                         ),
-                      Expanded(
-                        child: lista.isEmpty
+                      if (_filtrosOcultosMisiones)
+                        Expanded(
+                          child: lista.isEmpty
                             ? Center(
                                 child: Column(
                                   mainAxisAlignment: MainAxisAlignment.center,

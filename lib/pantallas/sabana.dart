@@ -26,7 +26,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   String? _filtroRiesgoEspecial;
   String? _filtroTipoUbicacion;
   String? _filtroMueble;
-  int? _filtroAnio = DateTime.now().year;
+  int? _filtroAnio;
   int? _filtroMes;
   bool _filtroSobrestockIA = false;
 
@@ -1393,25 +1393,23 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                   ),
                 )
               else
-                GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onVerticalDragEnd: (details) {
-                    if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
-                      setState(() => _filtrosOcultos = true);
-                    }
-                  },
-                  child: Container(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.44,
-                    ),
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                    decoration: const BoxDecoration(
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onVerticalDragEnd: (details) {
+                      if (details.primaryVelocity != null && details.primaryVelocity! < -150) {
+                        setState(() => _filtrosOcultos = true);
+                      }
+                    },
+                    child: Container(
                       color: Colors.black,
-                      border: Border(bottom: BorderSide(color: Colors.white24, width: 1)),
-                    ),
-                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                       child: Column(
                         children: [
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                children: [
                           Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -1430,7 +1428,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     _filtroRiesgoEspecial = null;
                                     _filtroTipoUbicacion = null;
                                     _filtroMueble = null;
-                                    _filtroAnio = DateTime.now().year;
+                                    _filtroAnio = null;
                                     _filtroMes = null;
                                     _filtroDescuadreSAP = false;
                                     _filtroSobrestockIA = false;
@@ -1776,24 +1774,31 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               ),
                             ],
                           ),
+                                ],
+                              ),
+                            ),
+                          ),
                           const SizedBox(height: 8),
                           InkWell(
                             onTap: () => setState(() => _filtrosOcultos = true),
                             borderRadius: BorderRadius.circular(12),
                             child: Container(
                               width: double.infinity,
-                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
                               decoration: BoxDecoration(
-                                color: Colors.amber.withOpacity(0.12),
+                                color: Colors.amber.withOpacity(0.16),
                                 borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                                border: Border.all(color: Colors.amber, width: 1.2),
                               ),
-                              child: const Row(
+                              child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 18),
-                                  SizedBox(width: 4),
-                                  Text('Subir / Ocultar Filtros', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                                  const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.amber, size: 20),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Subir / Ocultar Filtros (Ver ${docsFiltrados.length} lotes)',
+                                    style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
                                 ],
                               ),
                             ),
@@ -1803,8 +1808,9 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     ),
                   ),
                 ),
-              Expanded(
-                child: docsFinales.isEmpty
+              if (_filtrosOcultos)
+                Expanded(
+                  child: docsFinales.isEmpty
                     ? const Center(child: Text('No hay productos que coincidan.', style: TextStyle(color: Colors.white54)))
                     : ValueListenableBuilder<int>(
                         valueListenable: JerarquiaUbicacionHelper.upcCacheVersion,
