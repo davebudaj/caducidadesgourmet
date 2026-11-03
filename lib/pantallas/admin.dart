@@ -1585,104 +1585,117 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
   }
 
-  void _forzarActualizacionAppWeb() {
+  Future<void> _forzarActualizacionAppWeb() async {
     setState(() {
       _procesando = true;
-      _estado = "Limpiando caché del navegador y descargando la última versión...";
+      _estado = "🔄 Limpiando caché y cargando la última versión publicada...";
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('🔄 Descargando nueva versión de Gourmet Guard...'),
+        content: Text('🔄 Actualizando Gourmet Guard a la versión más reciente...'),
         backgroundColor: Colors.cyan,
         duration: Duration(seconds: 2),
       ),
     );
 
-    final script = html.ScriptElement()
-      ..text = '''
-        (async function() {
-          try {
-            if ('serviceWorker' in navigator) {
-              const registrations = await navigator.serviceWorker.getRegistrations();
-              for (const reg of registrations) {
-                await reg.unregister();
+    try {
+      final script = html.ScriptElement()
+        ..text = '''
+          (async function() {
+            try {
+              if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                for (const r of regs) { await r.unregister(); }
               }
-            }
-            if ('caches' in window) {
-              const keys = await caches.keys();
-              for (const key of keys) {
-                await caches.delete(key);
+              if ('caches' in window) {
+                const keys = await caches.keys();
+                for (const k of keys) { await caches.delete(k); }
               }
-            }
-          } catch (e) {}
-          const baseUrl = window.location.origin + window.location.pathname;
-          window.location.replace(baseUrl + '?v=' + Date.now());
-        })();
-      ''';
-    html.document.body?.append(script);
+            } catch (e) {}
+          })();
+        ''';
+      html.document.body?.append(script);
+    } catch (_) {}
+
+    await Future.delayed(const Duration(milliseconds: 450));
+    final String origin = html.window.location.origin;
+    final String path = html.window.location.pathname ?? '/';
+    html.window.location.assign('$origin$path?v=${DateTime.now().millisecondsSinceEpoch}');
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leadingWidth: 78,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 6.0, top: 9.0, bottom: 9.0),
-          child: ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.cyanAccent,
-              foregroundColor: Colors.black,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            icon: const Icon(Icons.system_update_alt_rounded, size: 14),
-            label: const Text('ACT.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
-            onPressed: _forzarActualizacionAppWeb,
-          ),
-        ),
-        titleSpacing: 4,
         centerTitle: true,
         title: const Text(
           'Centro de Mando',
-          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 9.0, horizontal: 3.0),
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.amber,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: Size.zero,
-              ),
-              icon: const Icon(Icons.cloud_download, size: 14),
-              label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
-              onPressed: () {
-                html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank');
-              },
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 36,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.cyanAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      ),
+                      icon: const Icon(Icons.system_update_alt_rounded, size: 15),
+                      label: const Text('ACT.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                      onPressed: _forzarActualizacionAppWeb,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SizedBox(
+                    height: 36,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      ),
+                      icon: const Icon(Icons.cloud_download, size: 15),
+                      label: const Text('SAP BD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                      onPressed: () {
+                        html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q72F5HJMJUSXNP', '_blank');
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SizedBox(
+                    height: 36,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.greenAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      ),
+                      icon: const Icon(Icons.point_of_sale, size: 15),
+                      label: const Text('SAP VNTS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                      onPressed: () {
+                        html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank');
+                      },
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 9.0, bottom: 9.0, right: 6.0),
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.greenAccent,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: Size.zero,
-              ),
-              icon: const Icon(Icons.point_of_sale, size: 14),
-              label: const Text('SAP VNTS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
-              onPressed: () {
-                html.window.open('https://sapbjp00db.liverpool.com.mx/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fcom.sap.pct!2fplatform_add_ons!2fcom.sap.ip.bi!2fiViews!2fcom.sap.ip.bi.bex?BOOKMARK=1TUPM9LFHL4Q6ZPPKLHHU0M3N', '_blank');
-              },
-            ),
-          ),
-        ],
+        ),
       ),
       body: SingleChildScrollView(
         child: Padding(

@@ -273,14 +273,6 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: 30,
-        backgroundColor: Colors.blueAccent.shade700,
-        title: Text(
-          'TIENDA: ${widget.nombreTienda.toUpperCase()} (${widget.idTiendaGlobal})',
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 2, color: Colors.white),
-        ),
-      ),
       body: pantallas[_indiceActual],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
