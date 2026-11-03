@@ -1585,6 +1585,43 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
   }
 
+  void _forzarActualizacionAppWeb() {
+    setState(() {
+      _procesando = true;
+      _estado = "Limpiando caché del navegador y descargando la última versión...";
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🔄 Descargando nueva versión de Gourmet Guard...'),
+        backgroundColor: Colors.cyan,
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    final script = html.ScriptElement()
+      ..text = '''
+        (async function() {
+          try {
+            if ('serviceWorker' in navigator) {
+              const registrations = await navigator.serviceWorker.getRegistrations();
+              for (const reg of registrations) {
+                await reg.unregister();
+              }
+            }
+            if ('caches' in window) {
+              const keys = await caches.keys();
+              for (const key of keys) {
+                await caches.delete(key);
+              }
+            }
+          } catch (e) {}
+          const baseUrl = window.location.origin + window.location.pathname;
+          window.location.replace(baseUrl + '?v=' + Date.now());
+        })();
+      ''';
+    html.document.body?.append(script);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1620,6 +1657,43 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               Text(_estado, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.amber)),
               const SizedBox(height: 20),
               if (_procesando) const CircularProgressIndicator(color: Colors.amber) else Column(children: [
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 18),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.amber, width: 1.5),
+                  ),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        height: 46,
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.system_update_alt_rounded, size: 20),
+                          label: const Text(
+                            'ACTUALIZAR APP (CARGAR NUEVA VERSIÓN)',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                          onPressed: _forzarActualizacionAppWeb,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      const Text(
+                        'Limpia la caché del navegador y descarga al instante la última actualización publicada.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 10, color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.only(bottom: 10),

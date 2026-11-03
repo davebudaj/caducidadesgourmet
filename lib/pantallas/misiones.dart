@@ -1241,10 +1241,11 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
       ),
       body: Column(
         children: [
-          // Pestañas: Pendientes vs Historial de Misiones
-          Container(
-            color: Colors.black,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          // Pestañas: Pendientes vs Historial de Misiones (Se ocultan junto con los filtros)
+          if (!_filtrosOcultosMisiones)
+            Container(
+              color: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             child: Row(
               children: [
                 Expanded(
@@ -1381,7 +1382,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber, size: 20),
                                 const SizedBox(width: 6),
                                 Text(
-                                  'Bajar Filtros (${lista.length} ${_verHistorial ? "en historial" : "misiones"})',
+                                  'Bajar Pestañas y Filtros • ${_verHistorial ? "Historial" : "Pendientes"} (${lista.length})',
                                   style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
                                 ),
                                 const SizedBox(width: 8),
