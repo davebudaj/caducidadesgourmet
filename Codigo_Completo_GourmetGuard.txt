@@ -1,6 +1,6 @@
 ====================================================================
 RESPALDO DE CÓDIGO FUENTE - GOURMET GUARD
-Generado: 03/11/2026 21:47:25
+Generado: 04/11/2026 16:08:02
 ====================================================================
 
 ====================================================================
@@ -385,6 +385,81 @@ class JerarquiaUbicacionHelper {
     } finally {
       _cargandoCacheUpc = false;
     }
+  }
+
+  static const List<String> _marcasConocidas = [
+    'COME VERDE', 'PATRONA MIA', 'PUNTA CIELO', 'LA PARROQUIA', 'LEE KUM KEE',
+    'SAN PELLEGRINO', 'HUY FONG', 'DE CECCO', 'SAMYANG', 'POCKY', 'GLICO',
+    'SATORU', 'SUPERLIFE', 'ZUMITAN', 'IAMARANTH', 'LOTTE', 'NONGSHIM',
+    'PALDO', 'HAITAI', 'CROWN', 'ORION', 'MEIJI', 'MORINAGA', 'BOURBON',
+    'KASUGAI', 'MARUCHAN', 'KIKKOMAN', 'TAJIN', 'VALENTINA', 'CHOLULA',
+    'TABASCO', 'PERRIER', 'EVIAN', 'FIJI', 'VOSS', 'ILLY', 'LAVAZZA',
+    'NESCAFE', 'STARBUCKS', 'TWININGS', 'TAZO', 'STASH', 'YOGI', 'HARNEY',
+    'LINDT', 'GHIRARDELLI', 'GODIVA', 'FERRERO', 'KINDER', 'NUTELLA',
+    'MILKA', 'TOBLERONE', 'VALOR', 'BARILLA', 'GALLO', 'BORGES', 'BERIO'
+  ];
+
+  static const Set<String> _palabrasGenericasProducto = {
+    'GALLETA', 'GALLETAS', 'SALSA', 'SOPA', 'RAMEN', 'PASTA', 'FIDEO',
+    'AGUA', 'MINERAL', 'CAFE', 'SOLUBLE', 'TE', 'BEBIDA', 'REFRESCO',
+    'JUGO', 'DULCE', 'GOMITA', 'GOMITAS', 'CHOCOLATE', 'CHOC', 'ALMENDRA',
+    'FRESA', 'VAINILLA', 'LIMON', 'MORA', 'AZUL', 'VERDE', 'ROJO', 'NEGRO',
+    'BLANCO', 'PICANTE', 'HOT', 'SPICY', 'ORIGINAL', 'CLASICO', 'ORGANICO',
+    'ORG', 'SIN', 'AZUCAR', 'LIGHT', 'MINI', 'BIG', 'BOWL', 'CUP', 'PET',
+    'LATA', 'FRASCO', 'BOLSA', 'CAJA', 'PAPA', 'PAPAS', 'ACEITE', 'AGUACATE',
+    'MIX', 'GARAP', 'FRUTA', 'MONJE', 'OBLEAS', 'AJONJOLI', 'PARA', 'SUSHI',
+    'CHICKEN', 'POLLO', 'RES', 'CAMARON', 'HABANERO', 'QUESO', 'LECHE'
+  };
+
+  static String obtenerMarcaVisual(Map<String, dynamic>? d) {
+    if (d == null) return 'SIN MARCA';
+    String marcaExplicita = (d['marca'] ?? '').toString().trim().toUpperCase();
+    if (marcaExplicita.isNotEmpty && marcaExplicita != 'ND' && marcaExplicita != 'NULL') {
+      return marcaExplicita;
+    }
+
+    String desc = (d['descripcion'] ?? '').toString().trim().toUpperCase();
+    if (desc.isEmpty || desc.contains('ARTÍCULO NUEVO') || desc.contains('ARTICULO NUEVO')) {
+      return 'POR VALIDAR';
+    }
+
+    for (String m in _marcasConocidas) {
+      if (desc.contains(m)) return m;
+    }
+
+    // Limpiar gramajes al final tipo ".150", ".0462", "500ML", "1.000"
+    String sinGramaje = desc
+        .replaceAll(RegExp(r'(\s*\.[0-9]+|\s+[0-9]+(\.[0-9]+)?\s*(G|GR|KG|ML|L|LT|OZ|PZ|PZA|PZAS))+$'), '')
+        .replaceAll(RegExp(r'[^A-ZÁÉÍÓÚÑ0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    List<String> tokens = sinGramaje
+        .split(' ')
+        .where((t) => t.length >= 3 && !RegExp(r'^[0-9]+$').hasMatch(t))
+        .toList();
+
+    for (int i = tokens.length - 1; i >= 0; i--) {
+      String cand = tokens[i];
+      if (!_palabrasGenericasProducto.contains(cand)) {
+        return cand;
+      }
+    }
+
+    String prov = (d['nombreProveedor'] ?? '').toString().trim().toUpperCase();
+    if (prov.isNotEmpty && prov != 'ND' && !prov.contains('SIN MATCH') && !prov.contains('TEMPORAL')) {
+      String provLimpio = prov
+          .replaceAll(RegExp(r'(S\s*A\s*DE\s*C\s*V|S\.A\.\s*DE\s*C\.V\.|SAPI\s*DE\s*C\s*V|S\s*DE\s*R\s*L\s*DE\s*C\s*V|S\s*A\s*P\s*I|COMERCIAL|DISTRIBUIDORA|IMPORTADORA|GRUPO|PRODUCTOS|ALIMENTOS|MEXICO)'), '')
+          .replaceAll(RegExp(r'[^A-ZÁÉÍÓÚÑ0-9\s]'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (provLimpio.isNotEmpty) {
+        List<String> pTokens = provLimpio.split(' ');
+        return pTokens.take(2).join(' ');
+      }
+    }
+
+    return tokens.isNotEmpty ? tokens.last : 'GOURMET';
   }
 
   static String obtenerUpcVisual(Map<String, dynamic>? d) {
@@ -5461,6 +5536,9 @@ ARCHIVO: lib/pantallas/finanzas.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'dart:convert';
+import 'package:universal_html/html.dart' as html;
+import '../modelos/selector_jerarquico_ubicacion.dart';
 
 class FinanzasService {
   static void actualizarResumenEnBatch({
@@ -5512,15 +5590,21 @@ class PantallaGraficas extends StatefulWidget {
 
 class _PantallaGraficasState extends State<PantallaGraficas> {
   int _indiceTocado = -1;
-  bool _vistaMensual = false;
+  // Primera vista por defecto: VISTA MENSUAL con el mes en curso
+  bool _vistaMensual = true;
   bool _sincronizando = false;
   int _anioAcumulado = DateTime.now().year;
   DateTime _mesSeleccionado = DateTime(DateTime.now().year, DateTime.now().month, 1);
+
+  // 0 = Los 3 Rubros, 1 = Proveedores, 2 = Grupos de Artículos, 3 = Marcas
+  int _rubroSeleccionado = 0;
 
   static const List<String> _meses = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
     'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
   ];
+
+  late Stream<QuerySnapshot> _resumenStream;
 
   DocumentReference<Map<String, dynamic>> get _refTienda =>
       FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
@@ -5528,17 +5612,225 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
   @override
   void initState() {
     super.initState();
-    _verificarInicializacionResumen();
+    _resumenStream = _refTienda.collection('resumen_financiero').snapshots();
+    _verificarYEmpaquetarDatos();
   }
 
-  Future<void> _verificarInicializacionResumen() async {
-    var snap = await _refTienda.collection('resumen_financiero').limit(1).get();
-    if (snap.docs.isEmpty) {
-      await _reconstruirResumenDesdeHistorial(silencioso: true);
+  Future<void> _verificarYEmpaquetarDatos() async {
+    try {
+      var docEmp = await _refTienda.collection('resumen_financiero').doc('empaquetado_inventario').get();
+      if (!docEmp.exists) {
+        await _reconstruirResumenYEmpaquetado(silencioso: true);
+      } else {
+        Timestamp? ts = docEmp.data()?['ultimaActualizacion'];
+        if (ts == null || DateTime.now().difference(ts.toDate()).inMinutes >= 5) {
+          _empaquetarInventarioSolo();
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _acumularEnPeriodo(
+    Map<String, Map<String, dynamic>> periodos,
+    String keyPeriodo, {
+    required double valor,
+    required int cant,
+    required int dias,
+    required String prov,
+    required String grupo,
+    required String marca,
+  }) {
+    var p = periodos.putIfAbsent(keyPeriodo, () => {
+      'total': 0.0,
+      'sano': 0.0,
+      'proximo': 0.0,
+      'critico': 0.0,
+      'caducado': 0.0,
+      'riesgo': 0.0,
+      'pzasTotal': 0,
+      'pzasRiesgo': 0,
+      'lotes': 0,
+      'proveedores': <String, Map<String, dynamic>>{},
+      'grupos': <String, Map<String, dynamic>>{},
+      'marcas': <String, Map<String, dynamic>>{},
+    });
+
+    bool enRiesgo = dias <= 30;
+    p['total'] = (p['total'] as double) + valor;
+    p['pzasTotal'] = (p['pzasTotal'] as int) + cant;
+    p['lotes'] = (p['lotes'] as int) + 1;
+
+    if (dias < 0) {
+      p['caducado'] = (p['caducado'] as double) + valor;
+      p['riesgo'] = (p['riesgo'] as double) + valor;
+      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
+    } else if (dias <= 14) {
+      p['critico'] = (p['critico'] as double) + valor;
+      p['riesgo'] = (p['riesgo'] as double) + valor;
+      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
+    } else if (dias <= 30) {
+      p['proximo'] = (p['proximo'] as double) + valor;
+      p['riesgo'] = (p['riesgo'] as double) + valor;
+      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
+    } else {
+      p['sano'] = (p['sano'] as double) + valor;
     }
+
+    void sumarRubro(String mapKey, String nombreClave) {
+      var mapaRubro = p[mapKey] as Map<String, Map<String, dynamic>>;
+      var item = mapaRubro.putIfAbsent(nombreClave, () => {
+        'total': 0.0,
+        'riesgo': 0.0,
+        'pzas': 0,
+        'pzasRiesgo': 0,
+      });
+      item['total'] = (item['total'] as double) + valor;
+      item['pzas'] = (item['pzas'] as int) + cant;
+      if (enRiesgo) {
+        item['riesgo'] = (item['riesgo'] as double) + valor;
+        item['pzasRiesgo'] = (item['pzasRiesgo'] as int) + cant;
+      }
+    }
+
+    sumarRubro('proveedores', prov);
+    sumarRubro('grupos', grupo);
+    sumarRubro('marcas', marca);
   }
 
-  Future<void> _reconstruirResumenDesdeHistorial({bool silencioso = false}) async {
+  Future<void> _empaquetarInventarioSolo() async {
+    try {
+      var invSnap = await _refTienda.collection('inventario_activo').get();
+      DateTime hoy = DateTime.now();
+      Map<String, Map<String, dynamic>> periodos = {};
+
+      double montoCritico15d = 0;
+      int lotesCriticos15d = 0;
+      int lotesBodega90d = 0;
+      double montoBodega90d = 0;
+      int lotesArticulosNuevos = 0;
+      int lotesEdicionTemporal = 0;
+      double capitalPiso = 0;
+      double capitalBodega = 0;
+      double capitalDisplay = 0;
+
+      Map<String, double> riesgoCriticoPorProv = {};
+      Map<String, double> riesgoPorUbicacion = {};
+      List<Map<String, dynamic>> lotesEnRiesgoPareto = [];
+
+      for (var doc in invSnap.docs) {
+        var data = doc.data();
+        String ubi = (data['ubicacion'] ?? 'ND').toString();
+        String ubiUp = ubi.toUpperCase();
+        if (ubiUp == 'EN TRÁNSITO') continue;
+
+        String desc = (data['descripcion'] ?? '').toString();
+        if (desc == 'Artículo Nuevo' || desc == 'ARTÍCULO NUEVO / NO EN CATÁLOGO') {
+          lotesArticulosNuevos++;
+        } else if (data['edicionTemporal'] == true) {
+          lotesEdicionTemporal++;
+        }
+
+        Timestamp? ts = data['fechaCaducidad'];
+        if (ts == null) continue;
+        DateTime cad = ts.toDate();
+        int dias = cad.difference(hoy).inDays;
+
+        int cant = (data['cantidad'] ?? 0) as int;
+        double precio = double.tryParse((data['precioVenta'] ?? 0).toString()) ?? 0.0;
+        double valor = cant * precio;
+
+        if (ubiUp.contains('BODEGA')) {
+          capitalBodega += valor;
+        } else if (ubiUp.contains('DISPLAY')) {
+          capitalDisplay += valor;
+        } else {
+          capitalPiso += valor;
+        }
+
+        String prov = (data['nombreProveedor'] ?? 'DESCONOCIDO').toString().trim();
+        if (prov.isEmpty) prov = 'DESCONOCIDO';
+        String grupo = (data['nombreGpoArticulos'] ?? 'SIN GRUPO').toString().trim();
+        if (grupo.isEmpty) grupo = 'SIN GRUPO';
+        String marca = JerarquiaUbicacionHelper.obtenerMarcaVisual(data);
+
+        if (dias <= 30 && valor > 0) {
+          lotesEnRiesgoPareto.add({
+            'sku': (data['sku'] ?? 'ND').toString(),
+            'descripcion': desc.isEmpty ? 'SIN NOMBRE' : desc,
+            'marca': marca,
+            'ubicacion': ubi,
+            'dias': dias,
+            'pzas': cant,
+            'monto': valor,
+          });
+        }
+
+        if (dias <= 15) {
+          lotesCriticos15d++;
+          montoCritico15d += valor;
+          riesgoCriticoPorProv[prov] = (riesgoCriticoPorProv[prov] ?? 0) + valor;
+          riesgoPorUbicacion[ubi] = (riesgoPorUbicacion[ubi] ?? 0) + valor;
+        }
+        if (ubiUp.contains('BODEGA') && dias <= 90 && dias > 0) {
+          lotesBodega90d++;
+          montoBodega90d += valor;
+        }
+
+        String keyMes = 'M_${cad.year}_${cad.month}';
+        String keyAnio = 'A_${cad.year}';
+
+        _acumularEnPeriodo(
+          periodos,
+          keyMes,
+          valor: valor,
+          cant: cant,
+          dias: dias,
+          prov: prov,
+          grupo: grupo,
+          marca: marca,
+        );
+        _acumularEnPeriodo(
+          periodos,
+          keyAnio,
+          valor: valor,
+          cant: cant,
+          dias: dias,
+          prov: prov,
+          grupo: grupo,
+          marca: marca,
+        );
+      }
+
+      lotesEnRiesgoPareto.sort((a, b) => (b['monto'] as double).compareTo(a['monto'] as double));
+      var top10SkusPareto = lotesEnRiesgoPareto.take(10).toList();
+
+      var topProvsCriticos = riesgoCriticoPorProv.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      var topUbisCriticas = riesgoPorUbicacion.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+
+      await _refTienda.collection('resumen_financiero').doc('empaquetado_inventario').set({
+        'periodos': periodos,
+        'diagnostico_operativo': {
+          'montoCritico15d': montoCritico15d,
+          'lotesCriticos15d': lotesCriticos15d,
+          'lotesBodega90d': lotesBodega90d,
+          'montoBodega90d': montoBodega90d,
+          'lotesArticulosNuevos': lotesArticulosNuevos,
+          'lotesEdicionTemporal': lotesEdicionTemporal,
+          'capitalPiso': capitalPiso,
+          'capitalBodega': capitalBodega,
+          'capitalDisplay': capitalDisplay,
+          'top10SkusPareto': top10SkusPareto,
+          'provFoco': topProvsCriticos.isNotEmpty
+              ? '${topProvsCriticos.first.key} (MXN ${topProvsCriticos.first.value.toStringAsFixed(2)})'
+              : 'Sin proveedores en riesgo crítico',
+          'ubiFoco': topUbisCriticas.isNotEmpty ? topUbisCriticas.first.key : 'Ninguna ubicación crítica',
+        },
+        'ultimaActualizacion': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _reconstruirResumenYEmpaquetado({bool silencioso = false}) async {
     if (!silencioso && mounted) setState(() => _sincronizando = true);
     try {
       var histSnap = await _refTienda.collection('historial_tratamientos').get();
@@ -5576,16 +5868,23 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       var batch = FirebaseFirestore.instance.batch();
       var actuales = await _refTienda.collection('resumen_financiero').get();
       for (var d in actuales.docs) {
-        batch.delete(d.reference);
+        if (d.id != 'empaquetado_inventario') {
+          batch.delete(d.reference);
+        }
       }
       for (var entry in acumuladoPorAnio.entries) {
         batch.set(_refTienda.collection('resumen_financiero').doc('${entry.key}'), entry.value);
       }
       await batch.commit();
 
+      await _empaquetarInventarioSolo();
+
       if (!silencioso && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Resumen financiero sincronizado en la base de datos'), backgroundColor: Colors.green),
+          const SnackBar(
+            content: Text('✅ Datos empaquetados y sincronizados en la base de datos.'),
+            backgroundColor: Colors.green,
+          ),
         );
       }
     } finally {
@@ -5593,177 +5892,668 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     }
   }
 
-  Future<void> _mostrarDiagnosticoEjecutivoIA() async {
+  void _cambiarMes(int delta) {
+    int anioMin = DateTime.now().year - 2;
+    DateTime nuevo = DateTime(_mesSeleccionado.year, _mesSeleccionado.month + delta, 1);
+    if (nuevo.year >= anioMin && nuevo.year <= DateTime.now().year + 5) {
+      setState(() {
+        _mesSeleccionado = nuevo;
+        _indiceTocado = -1;
+      });
+    }
+  }
+
+  Map<String, double> _obtenerTratamientosDePeriodo(
+    Map<int, Map<String, dynamic>> docsTratamientosPorAnio, {
+    required bool mensual,
+    required int anio,
+    int mes = 1,
+  }) {
+    double dev = 0, promo = 0, merma = 0;
+    double pzasDev = 0, pzasPromo = 0, pzasMerma = 0;
+    var r = docsTratamientosPorAnio[anio];
+    if (r != null) {
+      if (mensual) {
+        dev = double.tryParse((r['m${mes}_monto_dev'] ?? 0).toString()) ?? 0.0;
+        pzasDev = double.tryParse((r['m${mes}_pzas_dev'] ?? 0).toString()) ?? 0.0;
+        promo = double.tryParse((r['m${mes}_monto_promo'] ?? 0).toString()) ?? 0.0;
+        pzasPromo = double.tryParse((r['m${mes}_pzas_promo'] ?? 0).toString()) ?? 0.0;
+        merma = double.tryParse((r['m${mes}_monto_merma'] ?? 0).toString()) ?? 0.0;
+        pzasMerma = double.tryParse((r['m${mes}_pzas_merma'] ?? 0).toString()) ?? 0.0;
+      } else {
+        dev = double.tryParse((r['anual_monto_dev'] ?? 0).toString()) ?? 0.0;
+        pzasDev = double.tryParse((r['anual_pzas_dev'] ?? 0).toString()) ?? 0.0;
+        promo = double.tryParse((r['anual_monto_promo'] ?? 0).toString()) ?? 0.0;
+        pzasPromo = double.tryParse((r['anual_pzas_promo'] ?? 0).toString()) ?? 0.0;
+        merma = double.tryParse((r['anual_monto_merma'] ?? 0).toString()) ?? 0.0;
+        pzasMerma = double.tryParse((r['anual_pzas_merma'] ?? 0).toString()) ?? 0.0;
+      }
+    }
+    return {
+      'dev': dev,
+      'promo': promo,
+      'merma': merma,
+      'total': dev + promo + merma,
+      'pzasDev': pzasDev,
+      'pzasPromo': pzasPromo,
+      'pzasMerma': pzasMerma,
+    };
+  }
+
+  List<Map<String, dynamic>> _procesarListaRubro(
+    Map<String, dynamic>? rawMapa,
+    double totalInventarioPeriodo,
+    double pctRiesgoGlobalPeriodo,
+  ) {
+    if (rawMapa == null || rawMapa.isEmpty) return [];
+    List<Map<String, dynamic>> lista = [];
+
+    for (var entry in rawMapa.entries) {
+      var m = Map<String, dynamic>.from(entry.value as Map);
+      double tot = double.tryParse((m['total'] ?? 0).toString()) ?? 0.0;
+      double rsg = double.tryParse((m['riesgo'] ?? 0).toString()) ?? 0.0;
+      int pzas = (m['pzas'] ?? 0) as int;
+      int pzasRsg = (m['pzasRiesgo'] ?? 0) as int;
+      if (tot <= 0) continue;
+
+      double pctRiesgoInterno = (rsg / tot) * 100.0;
+      double pctParticipacionTotal = totalInventarioPeriodo > 0 ? (tot / totalInventarioPeriodo) * 100.0 : 0.0;
+      double desviacion = pctRiesgoInterno - pctRiesgoGlobalPeriodo;
+
+      lista.add({
+        'nombre': entry.key,
+        'total': tot,
+        'riesgo': rsg,
+        'pzas': pzas,
+        'pzasRiesgo': pzasRsg,
+        'pctRiesgo': pctRiesgoInterno,
+        'pctParticipacion': pctParticipacionTotal,
+        'desviacion': desviacion,
+      });
+    }
+
+    lista.sort((a, b) {
+      int cmpR = (b['riesgo'] as double).compareTo(a['riesgo'] as double);
+      if (cmpR != 0) return cmpR;
+      return (b['total'] as double).compareTo(a['total'] as double);
+    });
+    return lista;
+  }
+
+  Future<void> _mostrarDiagnosticoEjecutivoIA(
+    Map<String, dynamic> diagOp,
+    Map<int, Map<String, dynamic>> tratamientosPorAnio,
+  ) async {
+    DateTime hoy = DateTime.now();
+    double montoCritico15d = double.tryParse((diagOp['montoCritico15d'] ?? 0).toString()) ?? 0.0;
+    int lotesCriticos15d = (diagOp['lotesCriticos15d'] ?? 0) as int;
+    int lotesBodega90d = (diagOp['lotesBodega90d'] ?? 0) as int;
+    double montoBodega90d = double.tryParse((diagOp['montoBodega90d'] ?? 0).toString()) ?? 0.0;
+    int lotesArticulosNuevos = (diagOp['lotesArticulosNuevos'] ?? 0) as int;
+    int lotesEdicionTemporal = (diagOp['lotesEdicionTemporal'] ?? 0) as int;
+    String provFoco = (diagOp['provFoco'] ?? 'Sin proveedores en riesgo crítico').toString();
+    String ubiFoco = (diagOp['ubiFoco'] ?? 'Ninguna ubicación crítica').toString();
+
+    var tratAnual = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: false, anio: hoy.year);
+    double mermaAnual = tratAnual['merma']!;
+    double promoAnual = tratAnual['promo']!;
+    double devAnual = tratAnual['dev']!;
+    double totalSalidas = tratAnual['total']!;
+    double tasaRescate = totalSalidas > 0 ? ((promoAnual + devAnual) / totalSalidas) * 100 : 100.0;
+
+    String detalleCritico = lotesCriticos15d > 0
+        ? 'Tienes $lotesCriticos15d lote(s) en ventana crítica por MXN ${montoCritico15d.toStringAsFixed(2)}.\n• Mayor concentración en: $ubiFoco.\n• Proveedor clave a gestionar hoy: $provFoco.'
+        : '¡Excelente control! No tienes ningún lote en ventana crítica ≤ 15 días.';
+
+    String consejoRescate = tasaRescate < 60
+        ? '💡 Recomendación IA: Adelanta la etiqueta de 50% de descuento desde el aviso de 45 días para reducir la proporción de merma.'
+        : '💡 Excelente balance: La tienda rescata la mayoría del valor antes del vencimiento.';
+
+    String detalleFinanciero = totalSalidas > 0
+        ? 'Tasa de recuperación actual: ${tasaRescate.toStringAsFixed(1)}% (Rescatado en Promoción/Devolución: MXN ${(promoAnual + devAnual).toStringAsFixed(2)} vs Merma: MXN ${mermaAnual.toStringAsFixed(2)}).\n$consejoRescate'
+        : 'Aún no hay bajas con costo registradas en el año en curso.';
+
     showDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
-    );
-
-    try {
-      var results = await Future.wait([
-        _refTienda.collection('inventario_activo').get(),
-        _refTienda.collection('resumen_financiero').get(),
-      ]);
-      var invDocs = results[0].docs;
-      var resDocs = results[1].docs;
-
-      DateTime hoy = DateTime.now();
-      double montoCritico15d = 0;
-      int lotesCriticos15d = 0;
-      int lotesBodega90d = 0;
-      double montoBodega90d = 0;
-      int lotesArticulosNuevos = 0;
-      int lotesEdicionTemporal = 0;
-      Map<String, double> riesgoCriticoPorProv = {};
-      Map<String, double> riesgoPorUbicacion = {};
-
-      for (var doc in invDocs) {
-        var d = doc.data();
-        Timestamp? ts = d['fechaCaducidad'];
-        int cant = (d['cantidad'] ?? 0) as int;
-        double precio = double.tryParse((d['precioVenta'] ?? 0).toString()) ?? 0.0;
-        double valor = cant * precio;
-        String ubi = (d['ubicacion'] ?? 'ND').toString();
-        String prov = (d['nombreProveedor'] ?? 'ND').toString();
-        String desc = (d['descripcion'] ?? '').toString();
-
-        if (desc == 'Artículo Nuevo' || desc == 'ARTÍCULO NUEVO / NO EN CATÁLOGO') {
-          lotesArticulosNuevos++;
-        } else if (d['edicionTemporal'] == true) {
-          lotesEdicionTemporal++;
-        }
-
-        if (ts != null) {
-          int dias = ts.toDate().difference(hoy).inDays;
-          if (dias <= 15) {
-            lotesCriticos15d++;
-            montoCritico15d += valor;
-            riesgoCriticoPorProv[prov] = (riesgoCriticoPorProv[prov] ?? 0) + valor;
-            riesgoPorUbicacion[ubi] = (riesgoPorUbicacion[ubi] ?? 0) + valor;
-          }
-          if (ubi.toUpperCase().contains('BODEGA') && dias <= 90 && dias > 0) {
-            lotesBodega90d++;
-            montoBodega90d += valor;
-          }
-        }
-      }
-
-      double mermaAnual = 0, promoAnual = 0, devAnual = 0;
-      for (var rDoc in resDocs) {
-        if (rDoc.id == '${hoy.year}') {
-          var r = rDoc.data();
-          mermaAnual = double.tryParse((r['anual_monto_merma'] ?? 0).toString()) ?? 0.0;
-          promoAnual = double.tryParse((r['anual_monto_promo'] ?? 0).toString()) ?? 0.0;
-          devAnual = double.tryParse((r['anual_monto_dev'] ?? 0).toString()) ?? 0.0;
-        }
-      }
-
-      double totalSalidas = mermaAnual + promoAnual + devAnual;
-      double tasaRescate = totalSalidas > 0 ? ((promoAnual + devAnual) / totalSalidas) * 100 : 100.0;
-
-      var topProvsCriticos = riesgoCriticoPorProv.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-      var topUbisCriticas = riesgoPorUbicacion.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-      String provFoco = topProvsCriticos.isNotEmpty
-          ? '${topProvsCriticos.first.key} (MXN ${topProvsCriticos.first.value.toStringAsFixed(2)})'
-          : 'Sin proveedores en riesgo crítico';
-      String ubiFoco = topUbisCriticas.isNotEmpty ? topUbisCriticas.first.key : 'Ninguna ubicación crítica';
-
-      if (!mounted) return;
-      Navigator.pop(context);
-
-      String detalleCritico = lotesCriticos15d > 0
-          ? 'Tienes $lotesCriticos15d lote(s) en ventana crítica por MXN ${montoCritico15d.toStringAsFixed(2)}.\n• Mayor concentración en: $ubiFoco.\n• Proveedor clave a gestionar hoy: $provFoco.'
-          : '¡Excelente control! No tienes ningún lote en ventana crítica ≤ 15 días.';
-
-      String consejoRescate = tasaRescate < 60
-          ? '💡 Recomendación IA: Adelanta la etiqueta de 50% de descuento desde el aviso de 45 días para reducir la proporción de merma.'
-          : '💡 Excelente balance: La tienda rescata la mayoría del valor antes del vencimiento.';
-
-      String detalleFinanciero = totalSalidas > 0
-          ? 'Tasa de recuperación actual: ${tasaRescate.toStringAsFixed(1)}% (Rescatado en Promoción/Devolución: MXN ${(promoAnual + devAnual).toStringAsFixed(2)} vs Merma: MXN ${mermaAnual.toStringAsFixed(2)}).\n$consejoRescate'
-          : 'Aún no hay bajas con costo registradas en el año en curso.';
-
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF1A1A24),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.cyanAccent, width: 2)),
-          title: const Row(
-            children: [
-              Icon(Icons.auto_awesome, color: Colors.cyanAccent, size: 24),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text('Asistente Ejecutivo IA • Diagnóstico', style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 15)),
-              ),
-            ],
-          ),
-          content: SizedBox(
-            width: 480,
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _tarjetaInsightIA(
-                    icono: Icons.local_fire_department,
-                    color: Colors.redAccent,
-                    titulo: '1. Prioridad Crítica Hoy (≤ 15 Días)',
-                    detalle: detalleCritico,
-                  ),
-                  const SizedBox(height: 10),
-                  _tarjetaInsightIA(
-                    icono: Icons.warehouse,
-                    color: Colors.pinkAccent,
-                    titulo: '2. Flujo de Bodega a Piso (Política 90 Días)',
-                    detalle: lotesBodega90d > 0
-                        ? 'Se detectaron $lotesBodega90d lote(s) en BODEGA con menos de 90 días de vida (MXN ${montoBodega90d.toStringAsFixed(2)}). Se recomienda usar Trasvase Masivo hoy para exhibirlos en Piso/Display.'
-                        : 'Bodega saludable: Todos los lotes en bodega superan los 90 días de margen.',
-                  ),
-                  const SizedBox(height: 10),
-                  _tarjetaInsightIA(
-                    icono: Icons.trending_up,
-                    color: Colors.greenAccent,
-                    titulo: '3. Eficiencia de Rescate Financiero (${hoy.year})',
-                    detalle: detalleFinanciero,
-                  ),
-                  const SizedBox(height: 10),
-                  _tarjetaInsightIA(
-                    icono: Icons.qr_code_2,
-                    color: Colors.purpleAccent,
-                    titulo: '4. Integridad de Catálogo y Ediciones Temporales',
-                    detalle: '• Artículos Nuevos pendientes de validar en anaquel: $lotesArticulosNuevos lote(s).\n• Lotes con Edición Temporal en espera de alta en SAP: $lotesEdicionTemporal lote(s).',
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            if (lotesCriticos15d > 0)
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.orangeAccent, side: const BorderSide(color: Colors.orangeAccent)),
-                icon: const Icon(Icons.filter_list, size: 16),
-                label: const Text('VER CRÍTICOS EN SÁBANA', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  widget.onFiltroSeleccionado('critico');
-                },
-              ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('ENTENDIDO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.cyanAccent, width: 2)),
+        title: const Row(
+          children: [
+            Icon(Icons.auto_awesome, color: Colors.cyanAccent, size: 24),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text('Asistente Ejecutivo IA • Diagnóstico Rápido', style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 14)),
             ),
           ],
         ),
-      );
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error generando diagnóstico IA: $e')));
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _tarjetaInsightIA(
+                  icono: Icons.local_fire_department,
+                  color: Colors.redAccent,
+                  titulo: '1. Prioridad Crítica Hoy (≤ 15 Días)',
+                  detalle: detalleCritico,
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.warehouse,
+                  color: Colors.pinkAccent,
+                  titulo: '2. Flujo de Bodega a Piso (Política 90 Días)',
+                  detalle: lotesBodega90d > 0
+                      ? 'Se detectaron $lotesBodega90d lote(s) en BODEGA con menos de 90 días de vida (MXN ${montoBodega90d.toStringAsFixed(2)}). Se recomienda usar Trasvase Masivo hoy para exhibirlos en Piso/Display.'
+                      : 'Bodega saludable: Todos los lotes en bodega superan los 90 días de margen.',
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.trending_up,
+                  color: Colors.greenAccent,
+                  titulo: '3. Eficiencia de Rescate Financiero (${hoy.year})',
+                  detalle: detalleFinanciero,
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.qr_code_2,
+                  color: Colors.purpleAccent,
+                  titulo: '4. Integridad de Catálogo y Ediciones Temporales',
+                  detalle: '• Artículos Nuevos pendientes de validar en anaquel: $lotesArticulosNuevos lote(s).\n• Lotes con Edición Temporal en espera de alta en SAP: $lotesEdicionTemporal lote(s).',
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          if (lotesCriticos15d > 0)
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.orangeAccent, side: const BorderSide(color: Colors.orangeAccent)),
+              icon: const Icon(Icons.filter_list, size: 16),
+              label: const Text('VER CRÍTICOS EN SÁBANA', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              onPressed: () {
+                Navigator.pop(ctx);
+                widget.onFiltroSeleccionado('critico');
+              },
+            ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('ENTENDIDO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatearVariacion(double actual, double anterior) {
+    if (anterior <= 0) {
+      return actual > 0 ? '+100.0% (Nuevo)' : '0.0% (Sin cambio)';
+    }
+    double diffPct = ((actual - anterior) / anterior) * 100.0;
+    String signo = diffPct >= 0 ? '+' : '';
+    return '$signo${diffPct.toStringAsFixed(1)}%';
+  }
+
+  void _mostrarDiagnosticoProfundoIA(
+    Map<String, dynamic> todosPeriodos,
+    Map<int, Map<String, dynamic>> tratamientosPorAnio,
+    Map<String, dynamic> diagOp,
+  ) {
+    DateTime hoy = DateTime.now();
+    int anioAct = _vistaMensual ? _mesSeleccionado.year : _anioAcumulado;
+    int mesAct = _vistaMensual ? _mesSeleccionado.month : hoy.month;
+
+    DateTime mesAntDt = DateTime(anioAct, mesAct - 1, 1);
+    String keyMesActual = 'M_${anioAct}_$mesAct';
+    String keyMesAnterior = 'M_${mesAntDt.year}_${mesAntDt.month}';
+
+    var datosMesAct = Map<String, dynamic>.from((todosPeriodos[keyMesActual] ?? {}) as Map);
+    var datosMesAnt = Map<String, dynamic>.from((todosPeriodos[keyMesAnterior] ?? {}) as Map);
+
+    double invMesAct = double.tryParse((datosMesAct['total'] ?? 0).toString()) ?? 0.0;
+    double rsgMesAct = double.tryParse((datosMesAct['riesgo'] ?? 0).toString()) ?? 0.0;
+    double pctRsgMesAct = invMesAct > 0 ? (rsgMesAct / invMesAct) * 100.0 : 0.0;
+
+    double invMesAnt = double.tryParse((datosMesAnt['total'] ?? 0).toString()) ?? 0.0;
+    var tratMesAct = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: true, anio: anioAct, mes: mesAct);
+    var tratMesAnt = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: true, anio: mesAntDt.year, mes: mesAntDt.month);
+
+    List<Map<String, dynamic>> proyeccion3Meses = [];
+    double sumaProy3M = 0.0;
+    int pzasProy3M = 0;
+    for (int i = 1; i <= 3; i++) {
+      DateTime mFut = DateTime(hoy.year, hoy.month + i, 1);
+      String kFut = 'M_${mFut.year}_${mFut.month}';
+      var dFut = Map<String, dynamic>.from((todosPeriodos[kFut] ?? {}) as Map);
+      double totFut = double.tryParse((dFut['total'] ?? 0).toString()) ?? 0.0;
+      int pzFut = (dFut['pzasTotal'] ?? 0) as int;
+      int lotesFut = (dFut['lotes'] ?? 0) as int;
+      sumaProy3M += totFut;
+      pzasProy3M += pzFut;
+      proyeccion3Meses.add({
+        'etiqueta': '${_meses[mFut.month - 1]} ${mFut.year}',
+        'horizonte': '${i * 30} días',
+        'monto': totFut,
+        'pzas': pzFut,
+        'lotes': lotesFut,
+      });
+    }
+
+    int y0 = hoy.year;
+    int y1 = hoy.year - 1;
+    int y2 = hoy.year - 2;
+    var dAnio0 = Map<String, dynamic>.from((todosPeriodos['A_$y0'] ?? {}) as Map);
+    var dAnio1 = Map<String, dynamic>.from((todosPeriodos['A_$y1'] ?? {}) as Map);
+    var dAnio2 = Map<String, dynamic>.from((todosPeriodos['A_$y2'] ?? {}) as Map);
+
+    double invY0 = double.tryParse((dAnio0['total'] ?? 0).toString()) ?? 0.0;
+    double rsgY0 = double.tryParse((dAnio0['riesgo'] ?? 0).toString()) ?? 0.0;
+    double invY1 = double.tryParse((dAnio1['total'] ?? 0).toString()) ?? 0.0;
+    double invY2 = double.tryParse((dAnio2['total'] ?? 0).toString()) ?? 0.0;
+
+    var tratY0 = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: false, anio: y0);
+    var tratY1 = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: false, anio: y1);
+
+    double rescateY0 = tratY0['total']! > 0 ? ((tratY0['dev']! + tratY0['promo']!) / tratY0['total']!) * 100.0 : 100.0;
+    double mermaPctY0 = tratY0['total']! > 0 ? (tratY0['merma']! / tratY0['total']!) * 100.0 : 0.0;
+    double diffMetaRescate = rescateY0 - 75.0;
+
+    double capPiso = double.tryParse((diagOp['capitalPiso'] ?? 0).toString()) ?? 0.0;
+    double capBodega = double.tryParse((diagOp['capitalBodega'] ?? 0).toString()) ?? 0.0;
+    double capDisplay = double.tryParse((diagOp['capitalDisplay'] ?? 0).toString()) ?? 0.0;
+    double capTotalAreas = capPiso + capBodega + capDisplay;
+    double pctBodega = capTotalAreas > 0 ? (capBodega / capTotalAreas) * 100.0 : 0.0;
+
+    List<Map<String, dynamic>> top10Skus = [];
+    if (diagOp['top10SkusPareto'] is List) {
+      for (var item in (diagOp['top10SkusPareto'] as List)) {
+        top10Skus.add(Map<String, dynamic>.from(item as Map));
       }
     }
+
+    String keyActiva = _vistaMensual ? keyMesActual : 'A_$_anioAcumulado';
+    String nombrePeriodoActivo = _vistaMensual
+        ? '${_meses[_mesSeleccionado.month - 1]} ${_mesSeleccionado.year}'
+        : 'Acumulado Anual $_anioAcumulado';
+    var datosActivos = Map<String, dynamic>.from((todosPeriodos[keyActiva] ?? {}) as Map);
+    double totalAct = double.tryParse((datosActivos['total'] ?? 0).toString()) ?? 0.0;
+    double riesgoAct = double.tryParse((datosActivos['riesgo'] ?? 0).toString()) ?? 0.0;
+    double pctRiesgoGlobalAct = totalAct > 0 ? (riesgoAct / totalAct) * 100.0 : 0.0;
+
+    var listaProvs = _procesarListaRubro(datosActivos['proveedores'] as Map<String, dynamic>?, totalAct, pctRiesgoGlobalAct);
+    var listaGrupos = _procesarListaRubro(datosActivos['grupos'] as Map<String, dynamic>?, totalAct, pctRiesgoGlobalAct);
+    var listaMarcas = _procesarListaRubro(datosActivos['marcas'] as Map<String, dynamic>?, totalAct, pctRiesgoGlobalAct);
+
+    String topProvTxt = listaProvs.isNotEmpty
+        ? '${listaProvs.first['nombre']} (Riesgo: MXN ${(listaProvs.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaProvs.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaProvs.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaProvs.first['desviacion'] as double).toStringAsFixed(1)}%)'
+        : 'Sin exposición relevante';
+    String topGrupoTxt = listaGrupos.isNotEmpty
+        ? '${listaGrupos.first['nombre']} (Riesgo: MXN ${(listaGrupos.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaGrupos.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaGrupos.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaGrupos.first['desviacion'] as double).toStringAsFixed(1)}%)'
+        : 'Sin exposición relevante';
+    String topMarcaTxt = listaMarcas.isNotEmpty
+        ? '${listaMarcas.first['nombre']} (Riesgo: MXN ${(listaMarcas.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaMarcas.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaMarcas.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaMarcas.first['desviacion'] as double).toStringAsFixed(1)}%)'
+        : 'Sin exposición relevante';
+
+    String textoTopSkus = top10Skus.isEmpty
+        ? 'Sin SKUs críticos ≤30 días en este momento.'
+        : top10Skus.take(5).map((s) => '  • [${s['sku']}] ${s['marca']} - ${s['descripcion']} (${s['dias']}d) ➔ MXN ${(s['monto'] as double).toStringAsFixed(2)} en ${s['ubicacion']}').join('\n');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161620),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 2)),
+        title: const Row(
+          children: [
+            Icon(Icons.psychology, color: Colors.amber, size: 24),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '🧠 Diagnóstico Profundo IA (Mensual • 3M • Anual)',
+                style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 540,
+          height: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _tarjetaInsightIA(
+                  icono: Icons.calendar_month,
+                  color: Colors.cyanAccent,
+                  titulo: '1. Diagnóstico Mensual y Variación MoM (${_meses[mesAct - 1]} $anioAct vs ${_meses[mesAntDt.month - 1]})',
+                  detalle: '• Inventario que vence en el mes: MXN ${invMesAct.toStringAsFixed(2)} (En riesgo ≤30d: MXN ${rsgMesAct.toStringAsFixed(2)} • ${pctRsgMesAct.toStringAsFixed(1)}%).\n'
+                      '• Variación de inventario vs mes anterior (MoM): ${_formatearVariacion(invMesAct, invMesAnt)} (Mes previo: MXN ${invMesAnt.toStringAsFixed(2)}).\n'
+                      '• Tratamientos aplicados en el mes: MXN ${tratMesAct['total']!.toStringAsFixed(2)} vs MXN ${tratMesAnt['total']!.toStringAsFixed(2)} (${_formatearVariacion(tratMesAct['total']!, tratMesAnt['total']!)}).',
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.auto_graph,
+                  color: Colors.orangeAccent,
+                  titulo: '2. Proyección de Caducidades a 3 Meses Futuros (30 / 60 / 90 Días)',
+                  detalle: '• Capital total proyectado a vencer en los próximos 3 meses: MXN ${sumaProy3M.toStringAsFixed(2)} ($pzasProy3M pzas).\n' +
+                      proyeccion3Meses.map((p) => '  ↳ ${p['etiqueta']} (${p['horizonte']}): MXN ${(p['monto'] as double).toStringAsFixed(2)} (${p['pzas']} pzas en ${p['lotes']} lotes)').join('\n'),
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.stacked_line_chart,
+                  color: Colors.greenAccent,
+                  titulo: '3. Desempeño Acumulado Anual y Meta de Rescate ($y0 vs $y1 / $y2)',
+                  detalle: '• Inventario Acumulado $y0: MXN ${invY0.toStringAsFixed(2)} (En riesgo ≤30d: MXN ${rsgY0.toStringAsFixed(2)}) | Variación YoY vs $y1: ${_formatearVariacion(invY0, invY1)} (En $y2: MXN ${invY2.toStringAsFixed(2)}).\n'
+                      '• Bajas gestionadas $y0: MXN ${tratY0['total']!.toStringAsFixed(2)} (Devolución: MXN ${tratY0['dev']!.toStringAsFixed(2)} • Promoción: MXN ${tratY0['promo']!.toStringAsFixed(2)} • Merma: MXN ${tratY0['merma']!.toStringAsFixed(2)}).\n'
+                      '• Tasa de Rescate $y0: ${rescateY0.toStringAsFixed(1)}% vs Meta 75% (${diffMetaRescate >= 0 ? "+" : ""}${diffMetaRescate.toStringAsFixed(1)} pts) | Índice Merma: ${mermaPctY0.toStringAsFixed(1)}%.',
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.pie_chart,
+                  color: Colors.pinkAccent,
+                  titulo: '4. Desviación en los 3 Rubros ($nombrePeriodoActivo • Media Riesgo: ${pctRiesgoGlobalAct.toStringAsFixed(1)}%)',
+                  detalle: '• 🏢 Proveedor crítico #1: $topProvTxt\n'
+                      '• 📦 Grupo de Art. crítico #1: $topGrupoTxt\n'
+                      '• 🏷️ Marca crítica #1: $topMarcaTxt',
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.storefront,
+                  color: Colors.purpleAccent,
+                  titulo: '5. Distribución por Área y Top SKUs Críticos (Pareto 80/20)',
+                  detalle: '• Capital en Piso: MXN ${capPiso.toStringAsFixed(2)} • En Bodega: MXN ${capBodega.toStringAsFixed(2)} (${pctBodega.toStringAsFixed(1)}%) • En Display: MXN ${capDisplay.toStringAsFixed(2)}.\n'
+                      '• Top SKUs con mayor impacto financiero en riesgo:\n$textoTopSkus',
+                ),
+                const SizedBox(height: 10),
+                _tarjetaInsightIA(
+                  icono: Icons.lightbulb,
+                  color: Colors.amberAccent,
+                  titulo: '6. Recomendaciones Estratégicas IA',
+                  detalle: '1. Priorizar acuerdo de devolución o cambio físico con el proveedor #1 en desviación antes de cruzar el umbral de 15 días.\n'
+                      '2. Adelantar etiquetado de promoción en las marcas con desviación positiva (> +10% sobre la media de la tienda).\n'
+                      '3. Ejecutar trasvase de bodega a piso para los ${proyeccion3Meses.first['lotes']} lotes que entran en ventana de 30 días el próximo mes (${proyeccion3Meses.first['etiqueta']}).',
+                ),
+              ],
+            ),
+          ),
+        ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
+        actions: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                icon: const Icon(Icons.picture_as_pdf, size: 16),
+                label: const Text('PDF', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                onPressed: () => _exportarDiagnosticoProfundoPDF(
+                  nombrePeriodoActivo: nombrePeriodoActivo,
+                  invMesAct: invMesAct,
+                  rsgMesAct: rsgMesAct,
+                  pctRsgMesAct: pctRsgMesAct,
+                  varMoM: _formatearVariacion(invMesAct, invMesAnt),
+                  proyeccion3Meses: proyeccion3Meses,
+                  sumaProy3M: sumaProy3M,
+                  invY0: invY0,
+                  rsgY0: rsgY0,
+                  varYoY: _formatearVariacion(invY0, invY1),
+                  tratY0: tratY0,
+                  rescateY0: rescateY0,
+                  pctRiesgoGlobalAct: pctRiesgoGlobalAct,
+                  listaProvs: listaProvs,
+                  listaGrupos: listaGrupos,
+                  listaMarcas: listaMarcas,
+                  top10Skus: top10Skus,
+                  capPiso: capPiso,
+                  capBodega: capBodega,
+                  capDisplay: capDisplay,
+                ),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                icon: const Icon(Icons.table_view, size: 16),
+                label: const Text('EXCEL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                onPressed: () => _exportarDiagnosticoProfundoExcel(
+                  nombrePeriodoActivo: nombrePeriodoActivo,
+                  invMesAct: invMesAct,
+                  rsgMesAct: rsgMesAct,
+                  pctRsgMesAct: pctRsgMesAct,
+                  varMoM: _formatearVariacion(invMesAct, invMesAnt),
+                  proyeccion3Meses: proyeccion3Meses,
+                  invY0: invY0,
+                  rsgY0: rsgY0,
+                  varYoY: _formatearVariacion(invY0, invY1),
+                  tratY0: tratY0,
+                  rescateY0: rescateY0,
+                  pctRiesgoGlobalAct: pctRiesgoGlobalAct,
+                  listaProvs: listaProvs,
+                  listaGrupos: listaGrupos,
+                  listaMarcas: listaMarcas,
+                  top10Skus: top10Skus,
+                  capPiso: capPiso,
+                  capBodega: capBodega,
+                  capDisplay: capDisplay,
+                ),
+              ),
+            ],
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CERRAR', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _exportarDiagnosticoProfundoExcel({
+    required String nombrePeriodoActivo,
+    required double invMesAct,
+    required double rsgMesAct,
+    required double pctRsgMesAct,
+    required String varMoM,
+    required List<Map<String, dynamic>> proyeccion3Meses,
+    required double invY0,
+    required double rsgY0,
+    required String varYoY,
+    required Map<String, double> tratY0,
+    required double rescateY0,
+    required double pctRiesgoGlobalAct,
+    required List<Map<String, dynamic>> listaProvs,
+    required List<Map<String, dynamic>> listaGrupos,
+    required List<Map<String, dynamic>> listaMarcas,
+    required List<Map<String, dynamic>> top10Skus,
+    required double capPiso,
+    required double capBodega,
+    required double capDisplay,
+  }) {
+    StringBuffer csv = StringBuffer();
+    csv.writeln("REPORTE EJECUTIVO DE DIAGNOSTICO PROFUNDO IA - GOURMET GUARD");
+    csv.writeln("Tienda,${widget.idTiendaGlobal},Periodo Analizado,$nombrePeriodoActivo,Fecha Generacion,${DateTime.now().toIso8601String().substring(0, 10)}");
+    csv.writeln("");
+
+    csv.writeln("1. RESUMEN MENSUAL, ACUMULADO ANUAL Y DISTRIBUCION POR AREA");
+    csv.writeln("INDICADOR,INVENTARIO TOTAL (MXN),MONTO EN RIESGO <=30D (MXN),% EN RIESGO,VARIACION PERIODO ANTERIOR");
+    csv.writeln("Vista Mensual Actual,${invMesAct.toStringAsFixed(2)},${rsgMesAct.toStringAsFixed(2)},${pctRsgMesAct.toStringAsFixed(2)}%,$varMoM");
+    csv.writeln("Acumulado Anual (${DateTime.now().year}),${invY0.toStringAsFixed(2)},${rsgY0.toStringAsFixed(2)},${(invY0 > 0 ? (rsgY0 / invY0) * 100 : 0).toStringAsFixed(2)}%,$varYoY");
+    csv.writeln("Capital por Area,PISO: ${capPiso.toStringAsFixed(2)},BODEGA: ${capBodega.toStringAsFixed(2)},DISPLAY: ${capDisplay.toStringAsFixed(2)},TOTAL: ${(capPiso + capBodega + capDisplay).toStringAsFixed(2)}");
+    csv.writeln("");
+
+    csv.writeln("2. PROYECCION A 3 MESES FUTUROS (30 / 60 / 90 DIAS)");
+    csv.writeln("MES PROYECTADO,HORIZONTE,CAPITAL POR VENCER (MXN),PIEZAS,LOTES");
+    for (var p in proyeccion3Meses) {
+      csv.writeln("${p['etiqueta']},${p['horizonte']},${(p['monto'] as double).toStringAsFixed(2)},${p['pzas']},${p['lotes']}");
+    }
+    csv.writeln("");
+
+    csv.writeln("3. GESTION DE TRATAMIENTOS Y TASA DE RESCATE ANUAL");
+    csv.writeln("DEVOLUCION PROVEEDOR (MXN),RESCATADO PROMOCION (MXN),MERMA DESTRUCCION (MXN),TOTAL GESTIONADO (MXN),TASA DE RESCATE (%)");
+    csv.writeln("${tratY0['dev']!.toStringAsFixed(2)},${tratY0['promo']!.toStringAsFixed(2)},${tratY0['merma']!.toStringAsFixed(2)},${tratY0['total']!.toStringAsFixed(2)},${rescateY0.toStringAsFixed(2)}%");
+    csv.writeln("");
+
+    csv.writeln("4. TOP 10 SKUS CRITICOS INDIVIDUALES (PARETO 80/20)");
+    csv.writeln("SKU,MARCA,DESCRIPCION,UBICACION,DIAS RESTANTES,PIEZAS,MONTO EN RIESGO (MXN)");
+    for (var s in top10Skus) {
+      String dLimpia = '"${s['descripcion'].toString().replaceAll('"', '""')}"';
+      String uLimpia = '"${s['ubicacion'].toString().replaceAll('"', '""')}"';
+      csv.writeln("${s['sku']},${s['marca']},$dLimpia,$uLimpia,${s['dias']},${s['pzas']},${(s['monto'] as double).toStringAsFixed(2)}");
+    }
+    csv.writeln("");
+
+    void escribirTablaRubro(String titulo, List<Map<String, dynamic>> items) {
+      csv.writeln(titulo);
+      csv.writeln("NOMBRE,INVENTARIO TOTAL (MXN),MONTO EN RIESGO (MXN),PIEZAS TOTALES,PIEZAS EN RIESGO,% RIESGO RUBRO,% PARTICIPACION INVENTARIO,DESVIACION VS MEDIA (${pctRiesgoGlobalAct.toStringAsFixed(1)}%)");
+      for (var it in items) {
+        String nom = '"${it['nombre'].toString().replaceAll('"', '""')}"';
+        double tot = it['total'] as double;
+        double rsg = it['riesgo'] as double;
+        double pctR = it['pctRiesgo'] as double;
+        double pctP = it['pctParticipacion'] as double;
+        double desv = it['desviacion'] as double;
+        csv.writeln("$nom,${tot.toStringAsFixed(2)},${rsg.toStringAsFixed(2)},${it['pzas']},${it['pzasRiesgo']},${pctR.toStringAsFixed(2)}%,${pctP.toStringAsFixed(2)}%,${desv >= 0 ? '+' : ''}${desv.toStringAsFixed(2)}%");
+      }
+      csv.writeln("");
+    }
+
+    escribirTablaRubro("5. DESGLOSE Y DESVIACION POR PROVEEDOR ($nombrePeriodoActivo)", listaProvs);
+    escribirTablaRubro("6. DESGLOSE Y DESVIACION POR GRUPO DE ARTICULOS ($nombrePeriodoActivo)", listaGrupos);
+    escribirTablaRubro("7. DESGLOSE Y DESVIACION POR MARCA ($nombrePeriodoActivo)", listaMarcas);
+
+    final bytes = utf8.encode('\uFEFF${csv.toString()}');
+    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute("download", "Diagnostico_Profundo_IA_${widget.idTiendaGlobal}.csv")
+      ..click();
+    html.Url.revokeObjectUrl(url);
+  }
+
+  void _exportarDiagnosticoProfundoPDF({
+    required String nombrePeriodoActivo,
+    required double invMesAct,
+    required double rsgMesAct,
+    required double pctRsgMesAct,
+    required String varMoM,
+    required List<Map<String, dynamic>> proyeccion3Meses,
+    required double sumaProy3M,
+    required double invY0,
+    required double rsgY0,
+    required String varYoY,
+    required Map<String, double> tratY0,
+    required double rescateY0,
+    required double pctRiesgoGlobalAct,
+    required List<Map<String, dynamic>> listaProvs,
+    required List<Map<String, dynamic>> listaMarcas,
+    required List<Map<String, dynamic>> listaGrupos,
+    required List<Map<String, dynamic>> top10Skus,
+    required double capPiso,
+    required double capBodega,
+    required double capDisplay,
+  }) {
+    String filasRubroHtml(List<Map<String, dynamic>> items) {
+      if (items.isEmpty) return '<tr><td colspan="6">Sin registros en este periodo</td></tr>';
+      StringBuffer sb = StringBuffer();
+      for (var it in items.take(15)) {
+        double desv = it['desviacion'] as double;
+        String colorDesv = desv > 5 ? '#d32f2f' : (desv < -5 ? '#2e7d32' : '#555');
+        sb.write('<tr>');
+        sb.write('<td><b>${it['nombre']}</b></td>');
+        sb.write('<td>MXN ${(it['total'] as double).toStringAsFixed(2)}</td>');
+        sb.write('<td>MXN ${(it['riesgo'] as double).toStringAsFixed(2)}</td>');
+        sb.write('<td>${it['pzas']} (${it['pzasRiesgo']} rsg)</td>');
+        sb.write('<td>${(it['pctRiesgo'] as double).toStringAsFixed(1)}% (${(it['pctParticipacion'] as double).toStringAsFixed(1)}% inv)</td>');
+        sb.write('<td style="color:$colorDesv;font-weight:bold;">${desv >= 0 ? "+" : ""}${desv.toStringAsFixed(1)}%</td>');
+        sb.write('</tr>');
+      }
+      return sb.toString();
+    }
+
+    StringBuffer sbProy = StringBuffer();
+    for (var p in proyeccion3Meses) {
+      sbProy.write('<tr>');
+      sbProy.write('<td><b>${p['etiqueta']}</b></td>');
+      sbProy.write('<td>${p['horizonte']}</td>');
+      sbProy.write('<td>MXN ${(p['monto'] as double).toStringAsFixed(2)}</td>');
+      sbProy.write('<td>${p['pzas']} pzas</td>');
+      sbProy.write('<td>${p['lotes']} lotes</td>');
+      sbProy.write('</tr>');
+    }
+
+    StringBuffer sbTopSkus = StringBuffer();
+    if (top10Skus.isEmpty) {
+      sbTopSkus.write('<tr><td colspan="6">Sin SKUs en riesgo crítico</td></tr>');
+    } else {
+      for (var s in top10Skus) {
+        sbTopSkus.write('<tr>');
+        sbTopSkus.write('<td><b>${s['sku']}</b></td>');
+        sbTopSkus.write('<td>${s['marca']}</td>');
+        sbTopSkus.write('<td>${s['descripcion']}</td>');
+        sbTopSkus.write('<td>${s['ubicacion']}</td>');
+        sbTopSkus.write('<td>${s['dias']}d (${s['pzas']} pz)</td>');
+        sbTopSkus.write('<td style="color:#d32f2f;font-weight:bold;">MXN ${(s['monto'] as double).toStringAsFixed(2)}</td>');
+        sbTopSkus.write('</tr>');
+      }
+    }
+
+    StringBuffer htmlDoc = StringBuffer();
+    htmlDoc.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">');
+    htmlDoc.write('<title>Diagnóstico Profundo IA - ${widget.idTiendaGlobal}</title>');
+    htmlDoc.write('<style>');
+    htmlDoc.write('body { font-family: Arial, sans-serif; margin: 24px; color: #1e1e1e; background: #fff; }');
+    htmlDoc.write('.header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #ffc107; padding-bottom: 10px; margin-bottom: 16px; }');
+    htmlDoc.write('h1 { margin: 0; font-size: 20px; color: #111; }');
+    htmlDoc.write('h2 { font-size: 13.5px; background: #1e1e28; color: #ffc107; padding: 7px 12px; border-radius: 6px; margin-top: 16px; margin-bottom: 8px; }');
+    htmlDoc.write('.kpi-grid { display: flex; gap: 10px; margin-bottom: 14px; }');
+    htmlDoc.write('.kpi { flex: 1; border: 1px solid #ccc; border-radius: 8px; padding: 10px; background: #fafafa; }');
+    htmlDoc.write('.kpi-title { font-size: 10.5px; color: #666; font-weight: bold; }');
+    htmlDoc.write('.kpi-val { font-size: 16px; font-weight: bold; color: #111; margin-top: 4px; }');
+    htmlDoc.write('.kpi-sub { font-size: 10.5px; color: #d32f2f; margin-top: 2px; font-weight: bold; }');
+    htmlDoc.write('table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 12px; }');
+    htmlDoc.write('th { background: #eee; text-align: left; padding: 6px; border: 1px solid #ccc; }');
+    htmlDoc.write('td { padding: 6px; border: 1px solid #ddd; }');
+    htmlDoc.write('.no-print { margin-bottom: 16px; padding: 10px; background: #1e1e28; color: #fff; border-radius: 8px; text-align: right; }');
+    htmlDoc.write('.btn { background: #ffc107; color: #000; border: none; padding: 8px 16px; font-weight: bold; border-radius: 6px; cursor: pointer; }');
+    htmlDoc.write('@media print { .no-print { display: none; } body { margin: 0; } }');
+    htmlDoc.write('</style></head><body>');
+    htmlDoc.write('<div class="no-print"><button class="btn" onclick="window.print()">🖨️ IMPRIMIR / GUARDAR COMO PDF</button></div>');
+    htmlDoc.write('<div class="header"><div>');
+    htmlDoc.write('<h1>🧠 REPORTE EJECUTIVO DE DIAGNÓSTICO PROFUNDO IA</h1>');
+    htmlDoc.write('<div style="font-size:12px;color:#555;">Sucursal: <b>${widget.idTiendaGlobal}</b> • Periodo Analizado: <b>$nombrePeriodoActivo</b></div>');
+    htmlDoc.write('</div><div style="font-size:11px;text-align:right;">Fecha: ${DateTime.now().toIso8601String().substring(0, 10)}</div></div>');
+
+    htmlDoc.write('<div class="kpi-grid">');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">VISTA MENSUAL ACTUAL</div><div class="kpi-val">MXN ${invMesAct.toStringAsFixed(2)}</div><div class="kpi-sub">Riesgo: MXN ${rsgMesAct.toStringAsFixed(2)} (${pctRsgMesAct.toStringAsFixed(1)}%) • MoM: $varMoM</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">PROYECCIÓN 3 MESES FUTUROS</div><div class="kpi-val">MXN ${sumaProy3M.toStringAsFixed(2)}</div><div class="kpi-sub">Horizonte 30, 60 y 90 días</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">ACUMULADO ANUAL (${DateTime.now().year})</div><div class="kpi-val">MXN ${invY0.toStringAsFixed(2)}</div><div class="kpi-sub">Rescate: ${rescateY0.toStringAsFixed(1)}% (Meta 75%) • YoY: $varYoY</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">CAPITAL POR ÁREA</div><div class="kpi-val">Piso: MXN ${capPiso.toStringAsFixed(0)}</div><div class="kpi-sub">Bodega: MXN ${capBodega.toStringAsFixed(0)} • Display: MXN ${capDisplay.toStringAsFixed(0)}</div></div>');
+    htmlDoc.write('</div>');
+
+    htmlDoc.write('<h2>1. Proyección de Vencimientos a 3 Meses Futuros (30 / 60 / 90 Días)</h2>');
+    htmlDoc.write('<table><thead><tr><th>Mes Proyectado</th><th>Horizonte</th><th>Capital por Vencer</th><th>Piezas</th><th>Lotes</th></tr></thead><tbody>${sbProy.toString()}</tbody></table>');
+
+    htmlDoc.write('<h2>2. Top 10 SKUs Críticos Individuales (Pareto 80/20)</h2>');
+    htmlDoc.write('<table><thead><tr><th>SKU</th><th>Marca</th><th>Descripción</th><th>Ubicación</th><th>Días / Pzas</th><th>Monto en Riesgo</th></tr></thead><tbody>${sbTopSkus.toString()}</tbody></table>');
+
+    htmlDoc.write('<h2>3. Matriz de Proveedores en Riesgo y Desviación ($nombrePeriodoActivo)</h2>');
+    htmlDoc.write('<table><thead><tr><th>Proveedor</th><th>Inventario Total</th><th>Monto en Riesgo</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaProvs)}</tbody></table>');
+
+    htmlDoc.write('<h2>4. Matriz de Grupos de Artículos en Riesgo y Desviación ($nombrePeriodoActivo)</h2>');
+    htmlDoc.write('<table><thead><tr><th>Grupo de Artículos</th><th>Inventario Total</th><th>Monto en Riesgo</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaGrupos)}</tbody></table>');
+
+    htmlDoc.write('<h2>5. Matriz de Marcas en Riesgo y Desviación ($nombrePeriodoActivo)</h2>');
+    htmlDoc.write('<table><thead><tr><th>Marca</th><th>Inventario Total</th><th>Monto en Riesgo</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaMarcas)}</tbody></table>');
+
+    htmlDoc.write('<script>setTimeout(function(){ window.print(); }, 500);</script></body></html>');
+
+    final bytes = utf8.encode(htmlDoc.toString());
+    final blob = html.Blob([bytes], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
   }
 
   Widget _tarjetaInsightIA({required IconData icono, required Color color, required String titulo, required String detalle}) {
@@ -5790,27 +6580,6 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
         ],
       ),
     );
-  }
-
-  void _cambiarMes(int delta) {
-    int anioMin = DateTime.now().year - 2;
-    DateTime nuevo = DateTime(_mesSeleccionado.year, _mesSeleccionado.month + delta, 1);
-    if (nuevo.year >= anioMin && nuevo.year <= DateTime.now().year + 5) {
-      setState(() {
-        _mesSeleccionado = nuevo;
-        _indiceTocado = -1;
-      });
-    }
-  }
-
-  bool _entraEnPeriodoInventario(DateTime fecha, int anioActual) {
-    if (_vistaMensual) {
-      return fecha.year == _mesSeleccionado.year && fecha.month == _mesSeleccionado.month;
-    }
-    if (_anioAcumulado == 0) {
-      return fecha.year >= (anioActual - 2) && fecha.year <= (anioActual + 5);
-    }
-    return fecha.year == _anioAcumulado;
   }
 
   Widget _barraTratamiento(String titulo, double monto, int pzas, double totalMonto, Color color) {
@@ -5841,356 +6610,594 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     );
   }
 
+  Widget _resumenMiniRubro(String titulo, List<Map<String, dynamic>> items, double totalInv, Color color) {
+    int conRiesgo = items.where((e) => (e['riesgo'] as double) > 0).length;
+    String topNombre = items.isNotEmpty ? items.first['nombre'].toString() : 'Ninguno';
+    double topPctRiesgo = items.isNotEmpty ? (items.first['pctRiesgo'] as double) : 0.0;
+    double topDesv = items.isNotEmpty ? (items.first['desviacion'] as double) : 0.0;
+
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withOpacity(0.45)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(titulo, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 10.5)),
+            const SizedBox(height: 3),
+            Text('$conRiesgo de ${items.length} en riesgo', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+            const SizedBox(height: 2),
+            Text(
+              'Top: $topNombre',
+              style: const TextStyle(color: Colors.white70, fontSize: 9.5),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              'Riesgo: ${topPctRiesgo.toStringAsFixed(0)}% (Desv ${topDesv >= 0 ? "+" : ""}${topDesv.toStringAsFixed(0)}%)',
+              style: TextStyle(
+                color: topDesv > 0 ? Colors.redAccent : Colors.greenAccent,
+                fontSize: 9.5,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _construirSeccionRubro({
+    required String titulo,
+    required IconData icono,
+    required Color colorTema,
+    required List<Map<String, dynamic>> lista,
+    required double totalInventarioPeriodo,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorTema.withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icono, color: colorTema, size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  titulo,
+                  style: TextStyle(fontSize: 13, color: colorTema, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Text(
+                '${lista.length} activos',
+                style: const TextStyle(fontSize: 11, color: Colors.white54, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const Divider(color: Colors.white24, height: 14),
+          if (lista.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Center(
+                child: Text('¡Sin registros con vencimientos en este periodo!', style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+              ),
+            )
+          else
+            ...lista.take(15).map((item) {
+              double tot = item['total'] as double;
+              double rsg = item['riesgo'] as double;
+              double pctRiesgo = item['pctRiesgo'] as double;
+              double pctPart = item['pctParticipacion'] as double;
+              double desv = item['desviacion'] as double;
+              int pzas = item['pzas'] as int;
+              double barValue = totalInventarioPeriodo > 0 ? (tot / totalInventarioPeriodo).clamp(0.0, 1.0) : 0.0;
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item['nombre'].toString(),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          'Total: MXN ${tot.toStringAsFixed(2)} ($pzas pz)',
+                          style: TextStyle(color: colorTema, fontWeight: FontWeight.bold, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'En riesgo ≤30d: MXN ${rsg.toStringAsFixed(2)} (${pctRiesgo.toStringAsFixed(1)}%)',
+                          style: TextStyle(
+                            color: rsg > 0 ? Colors.redAccent : Colors.greenAccent,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          'Peso Inv: ${pctPart.toStringAsFixed(1)}% • Desv: ${desv >= 0 ? "+" : ""}${desv.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: desv > 5 ? Colors.orangeAccent : Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    LinearProgressIndicator(
+                      value: barValue,
+                      backgroundColor: Colors.white10,
+                      color: rsg > 0 ? Colors.redAccent : colorTema,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     int anioHoy = DateTime.now().year;
+    // Únicamente los 3 años dinámicos: ej. 2026, 2025, 2024 (sin botón de 3 AÑOS)
     List<int> ultimos3Anios = [anioHoy, anioHoy - 1, anioHoy - 2];
+    if (!ultimos3Anios.contains(_anioAcumulado)) {
+      _anioAcumulado = anioHoy;
+    }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Salud e Impacto Financiero', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.cyanAccent,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+    return StreamBuilder<QuerySnapshot>(
+      stream: _resumenStream,
+      builder: (context, resSnap) {
+        Map<String, dynamic> todosPeriodos = {};
+        Map<String, dynamic> diagOp = {};
+        Map<int, Map<String, dynamic>> tratamientosPorAnio = {};
+
+        if (resSnap.hasData) {
+          for (var doc in resSnap.data!.docs) {
+            if (doc.id == 'empaquetado_inventario') {
+              var dataEmp = doc.data() as Map<String, dynamic>;
+              todosPeriodos = Map<String, dynamic>.from((dataEmp['periodos'] ?? {}) as Map);
+              diagOp = Map<String, dynamic>.from((dataEmp['diagnostico_operativo'] ?? {}) as Map);
+            } else {
+              int? anioDoc = int.tryParse(doc.id);
+              if (anioDoc != null) {
+                tratamientosPorAnio[anioDoc] = doc.data() as Map<String, dynamic>;
+              }
+            }
+          }
+        }
+
+        String keyPeriodo = _vistaMensual
+            ? 'M_${_mesSeleccionado.year}_${_mesSeleccionado.month}'
+            : 'A_$_anioAcumulado';
+
+        var datosP = Map<String, dynamic>.from((todosPeriodos[keyPeriodo] ?? {}) as Map);
+        double totalRiesgo = double.tryParse((datosP['total'] ?? 0).toString()) ?? 0.0;
+        double valorSano = double.tryParse((datosP['sano'] ?? 0).toString()) ?? 0.0;
+        double valorProximo = double.tryParse((datosP['proximo'] ?? 0).toString()) ?? 0.0;
+        double valorCritico = double.tryParse((datosP['critico'] ?? 0).toString()) ?? 0.0;
+        double valorCaducado = double.tryParse((datosP['caducado'] ?? 0).toString()) ?? 0.0;
+        double montoEnRiesgo30d = valorCaducado + valorCritico + valorProximo;
+        double pctGlobalEnRiesgo = totalRiesgo > 0 ? (montoEnRiesgo30d / totalRiesgo) * 100.0 : 0.0;
+
+        var tratPeriodo = _obtenerTratamientosDePeriodo(
+          tratamientosPorAnio,
+          mensual: _vistaMensual,
+          anio: _vistaMensual ? _mesSeleccionado.year : _anioAcumulado,
+          mes: _mesSeleccionado.month,
+        );
+        double montoDevolucion = tratPeriodo['dev']!;
+        double montoPromo = tratPeriodo['promo']!;
+        double montoMerma = tratPeriodo['merma']!;
+        int pzasDevolucion = tratPeriodo['pzasDev']!.round();
+        int pzasPromo = tratPeriodo['pzasPromo']!.round();
+        int pzasMerma = tratPeriodo['pzasMerma']!.round();
+        double totalGestionado = tratPeriodo['total']!;
+
+        var proveedoresOrdenados = _procesarListaRubro(
+          datosP['proveedores'] as Map<String, dynamic>?,
+          totalRiesgo,
+          pctGlobalEnRiesgo,
+        );
+        var gruposOrdenados = _procesarListaRubro(
+          datosP['grupos'] as Map<String, dynamic>?,
+          totalRiesgo,
+          pctGlobalEnRiesgo,
+        );
+        var marcasOrdenadas = _procesarListaRubro(
+          datosP['marcas'] as Map<String, dynamic>?,
+          totalRiesgo,
+          pctGlobalEnRiesgo,
+        );
+
+        List<PieChartSectionData> rebanadas = [];
+        List<String> idFiltro = [];
+        double totalInv = valorSano + valorProximo + valorCritico + valorCaducado;
+        int idx = 0;
+
+        void agregarRebanada(double valor, Color color, String titulo, String id) {
+          if (valor > 0) {
+            bool tocado = _indiceTocado == idx;
+            String pct = ((valor / totalInv) * 100).toStringAsFixed(1);
+            rebanadas.add(PieChartSectionData(
+              value: valor,
+              color: color,
+              title: tocado ? '$pct%' : titulo,
+              radius: tocado ? 62 : 50,
+              titleStyle: TextStyle(fontSize: tocado ? 13 : 9, fontWeight: FontWeight.bold, color: color == Colors.redAccent ? Colors.white : Colors.black),
+            ));
+            idFiltro.add(id);
+            idx++;
+          }
+        }
+
+        agregarRebanada(valorSano, Colors.greenAccent, 'Sano\n>30d', 'sano');
+        agregarRebanada(valorProximo, Colors.yellow, 'Próximo\n15-30d', 'proximo');
+        agregarRebanada(valorCritico, Colors.orangeAccent, 'Crítico\n<15d', 'critico');
+        agregarRebanada(valorCaducado, Colors.redAccent, 'Caducado\nYa!', 'caducado');
+
+        String etiquetaPeriodo = _vistaMensual
+            ? '${_meses[_mesSeleccionado.month - 1]} ${_mesSeleccionado.year}'
+            : 'Acumulado $_anioAcumulado (Ene-Dic)';
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Salud e Impacto Financiero', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 9.0, horizontal: 2.0),
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.cyanAccent,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  icon: const Icon(Icons.auto_awesome, size: 14),
+                  label: const Text('DIAGNÓSTICO IA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+                  onPressed: () => _mostrarDiagnosticoEjecutivoIA(diagOp, tratamientosPorAnio),
+                ),
               ),
-              icon: const Icon(Icons.auto_awesome, size: 16),
-              label: const Text('DIAGNÓSTICO IA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-              onPressed: _mostrarDiagnosticoEjecutivoIA,
-            ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 9.0, horizontal: 2.0),
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  icon: const Icon(Icons.psychology, size: 15),
+                  label: const Text('IA PROFUNDA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+                  onPressed: () => _mostrarDiagnosticoProfundoIA(todosPeriodos, tratamientosPorAnio, diagOp),
+                ),
+              ),
+              IconButton(
+                icon: _sincronizando
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber))
+                    : const Icon(Icons.sync, color: Colors.amber, size: 20),
+                tooltip: 'Actualizar paquete de datos en la BD',
+                onPressed: _sincronizando ? null : () => _reconstruirResumenYEmpaquetado(silencioso: false),
+              ),
+            ],
           ),
-          IconButton(
-            icon: _sincronizando
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber))
-                : const Icon(Icons.sync, color: Colors.amber),
-            tooltip: 'Sincronizar sumas pre-calculadas',
-            onPressed: _sincronizando ? null : () => _reconstruirResumenDesdeHistorial(silencioso: false),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Container(
-            color: Colors.black,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Column(
-              children: [
-                Row(
+          body: !resSnap.hasData
+              ? const Center(child: CircularProgressIndicator(color: Colors.amber))
+              : Column(
                   children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: !_vistaMensual ? Colors.amber : Colors.white10,
-                          foregroundColor: !_vistaMensual ? Colors.black : Colors.white70,
-                        ),
-                        icon: const Icon(Icons.history_edu, size: 16),
-                        label: const Text('ACUMULADO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                        onPressed: () => setState(() => _vistaMensual = false),
+                    Container(
+                      color: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _vistaMensual ? Colors.amber : Colors.white10,
+                                    foregroundColor: _vistaMensual ? Colors.black : Colors.white70,
+                                  ),
+                                  icon: const Icon(Icons.calendar_month, size: 16),
+                                  label: const Text('VISTA MENSUAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                  onPressed: () => setState(() => _vistaMensual = true),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: !_vistaMensual ? Colors.amber : Colors.white10,
+                                    foregroundColor: !_vistaMensual ? Colors.black : Colors.white70,
+                                  ),
+                                  icon: const Icon(Icons.history_edu, size: 16),
+                                  label: const Text('ACUMULADO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                  onPressed: () => setState(() => _vistaMensual = false),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          if (!_vistaMensual)
+                            Row(
+                              children: ultimos3Anios.map((anio) {
+                                bool sel = _anioAcumulado == anio;
+                                return Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                                    child: OutlinedButton(
+                                      style: OutlinedButton.styleFrom(
+                                        backgroundColor: sel ? Colors.amber.withOpacity(0.22) : Colors.white10,
+                                        side: BorderSide(color: sel ? Colors.amber : Colors.white24, width: sel ? 1.5 : 1),
+                                        padding: const EdgeInsets.symmetric(vertical: 8),
+                                      ),
+                                      onPressed: () => setState(() => _anioAcumulado = anio),
+                                      child: Text(
+                                        '$anio',
+                                        style: TextStyle(
+                                          color: sel ? Colors.amberAccent : Colors.white70,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            )
+                          else
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white10,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.amber.withOpacity(0.5)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  IconButton(icon: const Icon(Icons.chevron_left, color: Colors.amber), onPressed: () => _cambiarMes(-1)),
+                                  Text(
+                                    '${_meses[_mesSeleccionado.month - 1].toUpperCase()} ${_mesSeleccionado.year}',
+                                    style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1.2),
+                                  ),
+                                  IconButton(icon: const Icon(Icons.chevron_right, color: Colors.amber), onPressed: () => _cambiarMes(1)),
+                                ],
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 8),
                     Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _vistaMensual ? Colors.amber : Colors.white10,
-                          foregroundColor: _vistaMensual ? Colors.black : Colors.white70,
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(14.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.04),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: Column(
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        flex: 5,
+                                        child: SizedBox(
+                                          height: 150,
+                                          child: rebanadas.isEmpty
+                                              ? Center(
+                                                  child: Text(
+                                                    "Sin vencimientos en\n$etiquetaPeriodo",
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                                  ),
+                                                )
+                                              : PieChart(
+                                                  PieChartData(
+                                                    sectionsSpace: 3,
+                                                    centerSpaceRadius: 26,
+                                                    sections: rebanadas,
+                                                    pieTouchData: PieTouchData(
+                                                      touchCallback: (FlTouchEvent event, pieTouchResponse) {
+                                                        if (!event.isInterestedForInteractions || pieTouchResponse?.touchedSection == null) {
+                                                          if (_indiceTocado != -1) setState(() => _indiceTocado = -1);
+                                                          return;
+                                                        }
+                                                        int nId = pieTouchResponse!.touchedSection!.touchedSectionIndex;
+                                                        if (nId != _indiceTocado) setState(() => _indiceTocado = nId);
+                                                        if (event is FlTapUpEvent && nId >= 0 && nId < idFiltro.length) {
+                                                          widget.onFiltroSeleccionado(idFiltro[nId]);
+                                                          setState(() => _indiceTocado = -1);
+                                                        }
+                                                      },
+                                                    ),
+                                                  ),
+                                                ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        flex: 6,
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              _vistaMensual ? 'Inventario del Mes ($etiquetaPeriodo)' : 'Inventario Total ($etiquetaPeriodo)',
+                                              style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'MXN ${totalRiesgo.toStringAsFixed(2)}',
+                                              style: const TextStyle(color: Colors.amberAccent, fontSize: 20, fontWeight: FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: Colors.redAccent.withOpacity(0.15),
+                                                borderRadius: BorderRadius.circular(8),
+                                                border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                                              ),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'En Riesgo (≤30d): MXN ${montoEnRiesgo30d.toStringAsFixed(2)}',
+                                                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    'Índice / Desviación en Riesgo: ${pctGlobalEnRiesgo.toStringAsFixed(1)}%',
+                                                    style: const TextStyle(color: Colors.yellowAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      _resumenMiniRubro('🏢 Proveedores', proveedoresOrdenados, totalRiesgo, Colors.amber),
+                                      const SizedBox(width: 6),
+                                      _resumenMiniRubro('📦 Grupos Art.', gruposOrdenados, totalRiesgo, Colors.cyanAccent),
+                                      const SizedBox(width: 6),
+                                      _resumenMiniRubro('🏷️ Marcas', marcasOrdenadas, totalRiesgo, Colors.pinkAccent),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: Colors.white10,
+                                borderRadius: BorderRadius.circular(15),
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Text('Participación de Tratamientos', style: TextStyle(fontSize: 13, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                      Text('Total: MXN ${totalGestionado.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const Divider(color: Colors.white24, height: 14),
+                                  _barraTratamiento('📦 Devolución a Proveedor', montoDevolucion, pzasDevolucion, totalGestionado, Colors.cyanAccent),
+                                  _barraTratamiento('🏷️ Rescatado en Promoción', montoPromo, pzasPromo, totalGestionado, Colors.greenAccent),
+                                  _barraTratamiento('📉 Merma / Destrucción', montoMerma, pzasMerma, totalGestionado, Colors.redAccent),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                _chipRubro(0, '📊 Los 3 Rubros'),
+                                const SizedBox(width: 6),
+                                _chipRubro(1, '🏢 Proveedor'),
+                                const SizedBox(width: 6),
+                                _chipRubro(2, '📦 Grupo Art.'),
+                                const SizedBox(width: 6),
+                                _chipRubro(3, '🏷️ Marca'),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            if (_rubroSeleccionado == 0 || _rubroSeleccionado == 1)
+                              _construirSeccionRubro(
+                                titulo: 'Proveedores en Riesgo ($etiquetaPeriodo)',
+                                icono: Icons.business,
+                                colorTema: Colors.amber,
+                                lista: proveedoresOrdenados,
+                                totalInventarioPeriodo: totalRiesgo,
+                              ),
+                            if (_rubroSeleccionado == 0 || _rubroSeleccionado == 2)
+                              _construirSeccionRubro(
+                                titulo: 'Grupos de Artículos en Riesgo ($etiquetaPeriodo)',
+                                icono: Icons.category,
+                                colorTema: Colors.cyanAccent,
+                                lista: gruposOrdenados,
+                                totalInventarioPeriodo: totalRiesgo,
+                              ),
+                            if (_rubroSeleccionado == 0 || _rubroSeleccionado == 3)
+                              _construirSeccionRubro(
+                                titulo: 'Marcas en Riesgo ($etiquetaPeriodo)',
+                                icono: Icons.sell,
+                                colorTema: Colors.pinkAccent,
+                                lista: marcasOrdenadas,
+                                totalInventarioPeriodo: totalRiesgo,
+                              ),
+                          ],
                         ),
-                        icon: const Icon(Icons.calendar_month, size: 16),
-                        label: const Text('VISTA MENSUAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                        onPressed: () => setState(() => _vistaMensual = true),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                if (!_vistaMensual)
-                  Row(
-                    children: [
-                      ...ultimos3Anios.map((anio) {
-                        bool sel = _anioAcumulado == anio;
-                        return Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 3),
-                            child: OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                backgroundColor: sel ? Colors.amber.withOpacity(0.2) : Colors.white10,
-                                side: BorderSide(color: sel ? Colors.amber : Colors.white24),
-                                padding: const EdgeInsets.symmetric(vertical: 6),
-                              ),
-                              onPressed: () => setState(() => _anioAcumulado = anio),
-                              child: Text('$anio', style: TextStyle(color: sel ? Colors.amberAccent : Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
-                            ),
-                          ),
-                        );
-                      }),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 3),
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: _anioAcumulado == 0 ? Colors.amber.withOpacity(0.2) : Colors.white10,
-                              side: BorderSide(color: _anioAcumulado == 0 ? Colors.amber : Colors.white24),
-                              padding: const EdgeInsets.symmetric(vertical: 6),
-                            ),
-                            onPressed: () => setState(() => _anioAcumulado = 0),
-                            child: Text('3 AÑOS', style: TextStyle(color: _anioAcumulado == 0 ? Colors.amberAccent : Colors.white70, fontWeight: FontWeight.bold, fontSize: 11)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  Container(
-                    decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber.withOpacity(0.5))),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(icon: const Icon(Icons.chevron_left, color: Colors.amber), onPressed: () => _cambiarMes(-1)),
-                        Text('${_meses[_mesSeleccionado.month - 1].toUpperCase()} ${_mesSeleccionado.year}',
-                            style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1.2)),
-                        IconButton(icon: const Icon(Icons.chevron_right, color: Colors.amber), onPressed: () => _cambiarMes(1)),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
+        );
+      },
+    );
+  }
+
+  Widget _chipRubro(int index, String label) {
+    bool activo = _rubroSeleccionado == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _rubroSeleccionado = index),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 7),
+          decoration: BoxDecoration(
+            color: activo ? Colors.amber : Colors.white10,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: activo ? Colors.amberAccent : Colors.white24),
           ),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _refTienda.collection('inventario_activo').snapshots(),
-              builder: (context, invSnap) {
-                if (!invSnap.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
-
-                return StreamBuilder<QuerySnapshot>(
-                  stream: _refTienda.collection('resumen_financiero').snapshots(),
-                  builder: (context, resSnap) {
-                    double totalRiesgo = 0, valorSano = 0, valorProximo = 0, valorCritico = 0, valorCaducado = 0;
-                    Map<String, double> riesgoPorProveedor = {};
-                    DateTime hoy = DateTime.now();
-
-                    for (var doc in invSnap.data!.docs) {
-                      var data = doc.data() as Map<String, dynamic>;
-                      Timestamp? ts = data['fechaCaducidad'];
-                      if (ts == null) continue;
-                      DateTime cad = ts.toDate();
-                      if (!_entraEnPeriodoInventario(cad, anioHoy)) continue;
-
-                      int dias = cad.difference(hoy).inDays;
-                      int cant = data['cantidad'] ?? 0;
-                      double precio = double.tryParse((data['precioVenta'] ?? 0).toString()) ?? 0.0;
-                      double valor = cant * precio;
-
-                      if (dias < 0) {
-                        valorCaducado += valor;
-                        totalRiesgo += valor;
-                      } else if (dias <= 14) {
-                        valorCritico += valor;
-                        totalRiesgo += valor;
-                      } else if (dias <= 30) {
-                        valorProximo += valor;
-                        totalRiesgo += valor;
-                      } else {
-                        valorSano += valor;
-                        totalRiesgo += valor;
-                      }
-
-                      String prov = data['nombreProveedor'] ?? 'DESCONOCIDO';
-                      riesgoPorProveedor[prov] = (riesgoPorProveedor[prov] ?? 0) + valor;
-                    }
-
-                    double montoMerma = 0, montoPromo = 0, montoDevolucion = 0;
-                    int pzasMerma = 0, pzasPromo = 0, pzasDevolucion = 0;
-
-                    if (resSnap.hasData) {
-                      for (var doc in resSnap.data!.docs) {
-                        int anioDoc = int.tryParse(doc.id) ?? 0;
-                        var r = doc.data() as Map<String, dynamic>;
-
-                        if (_vistaMensual) {
-                          if (anioDoc == _mesSeleccionado.year) {
-                            int m = _mesSeleccionado.month;
-                            montoDevolucion += double.tryParse((r['m${m}_monto_dev'] ?? 0).toString()) ?? 0.0;
-                            pzasDevolucion += (r['m${m}_pzas_dev'] ?? 0) as int;
-                            montoPromo += double.tryParse((r['m${m}_monto_promo'] ?? 0).toString()) ?? 0.0;
-                            pzasPromo += (r['m${m}_pzas_promo'] ?? 0) as int;
-                            montoMerma += double.tryParse((r['m${m}_monto_merma'] ?? 0).toString()) ?? 0.0;
-                            pzasMerma += (r['m${m}_pzas_merma'] ?? 0) as int;
-                          }
-                        } else {
-                          bool incluirAnio = (_anioAcumulado == 0)
-                              ? (anioDoc >= anioHoy - 2 && anioDoc <= anioHoy + 1)
-                              : (anioDoc == _anioAcumulado);
-                          if (incluirAnio) {
-                            montoDevolucion += double.tryParse((r['anual_monto_dev'] ?? 0).toString()) ?? 0.0;
-                            pzasDevolucion += (r['anual_pzas_dev'] ?? 0) as int;
-                            montoPromo += double.tryParse((r['anual_monto_promo'] ?? 0).toString()) ?? 0.0;
-                            pzasPromo += (r['anual_pzas_promo'] ?? 0) as int;
-                            montoMerma += double.tryParse((r['anual_monto_merma'] ?? 0).toString()) ?? 0.0;
-                            pzasMerma += (r['anual_pzas_merma'] ?? 0) as int;
-                          }
-                        }
-                      }
-                    }
-
-                    double totalGestionado = montoMerma + montoPromo + montoDevolucion;
-                    var proveedoresOrdenados = riesgoPorProveedor.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-                    List<PieChartSectionData> rebanadas = [];
-                    List<String> idFiltro = [];
-                    double totalInv = valorSano + valorProximo + valorCritico + valorCaducado;
-                    int idx = 0;
-
-                    void agregarRebanada(double valor, Color color, String titulo, String id) {
-                      if (valor > 0) {
-                        bool tocado = _indiceTocado == idx;
-                        String pct = ((valor / totalInv) * 100).toStringAsFixed(1);
-                        rebanadas.add(PieChartSectionData(
-                          value: valor,
-                          color: color,
-                          title: tocado ? '$pct%' : titulo,
-                          radius: tocado ? 62 : 50,
-                          titleStyle: TextStyle(fontSize: tocado ? 14 : 9, fontWeight: FontWeight.bold, color: color == Colors.redAccent ? Colors.white : Colors.black),
-                        ));
-                        idFiltro.add(id);
-                        idx++;
-                      }
-                    }
-
-                    agregarRebanada(valorSano, Colors.greenAccent, 'Sano\n>30d', 'sano');
-                    agregarRebanada(valorProximo, Colors.yellow, 'Próximo\n15-30d', 'proximo');
-                    agregarRebanada(valorCritico, Colors.orangeAccent, 'Crítico\n<15d', 'critico');
-                    agregarRebanada(valorCaducado, Colors.redAccent, 'Caducado\nYa!', 'caducado');
-
-                    String etiquetaPeriodo = _vistaMensual
-                        ? '${_meses[_mesSeleccionado.month - 1]} ${_mesSeleccionado.year}'
-                        : (_anioAcumulado == 0 ? 'Últimos 3 Años (${anioHoy - 2}-$anioHoy)' : 'Acumulado $_anioAcumulado (Ene-Dic)');
-
-                    return SingleChildScrollView(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            height: 155,
-                            child: rebanadas.isEmpty
-                                ? Center(child: Text("Sin inventario que venza en $etiquetaPeriodo", style: const TextStyle(color: Colors.white54)))
-                                : PieChart(
-                                    PieChartData(
-                                      sectionsSpace: 4,
-                                      centerSpaceRadius: 30,
-                                      sections: rebanadas,
-                                      pieTouchData: PieTouchData(
-                                        touchCallback: (FlTouchEvent event, pieTouchResponse) {
-                                          if (!event.isInterestedForInteractions || pieTouchResponse?.touchedSection == null) {
-                                            if (_indiceTocado != -1) setState(() => _indiceTocado = -1);
-                                            return;
-                                          }
-                                          int nId = pieTouchResponse!.touchedSection!.touchedSectionIndex;
-                                          if (nId != _indiceTocado) setState(() => _indiceTocado = nId);
-                                          if (event is FlTapUpEvent && nId >= 0 && nId < idFiltro.length) {
-                                            widget.onFiltroSeleccionado(idFiltro[nId]);
-                                            setState(() => _indiceTocado = -1);
-                                          }
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                          ),
-                          const SizedBox(height: 12),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(colors: [Colors.redAccent, Colors.orangeAccent]),
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            child: Column(
-                              children: [
-                                Text(
-                                  _vistaMensual ? 'Total por Caducar en $etiquetaPeriodo' : 'Inventario Total en $etiquetaPeriodo',
-                                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                                ),
-                                const SizedBox(height: 4),
-                                Text('MXN ${totalRiesgo.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
-                                if (!_vistaMensual)
-                                  Text(
-                                    'En riesgo inmediato (≤30d): MXN ${(valorCaducado + valorCritico + valorProximo).toStringAsFixed(2)}',
-                                    style: const TextStyle(color: Colors.yellowAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: Colors.white10,
-                              borderRadius: BorderRadius.circular(15),
-                              border: Border.all(color: Colors.white24),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text('Participación de Tratamientos', style: TextStyle(fontSize: 14, color: Colors.amber, fontWeight: FontWeight.bold)),
-                                    Text('Total: MXN ${totalGestionado.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                                const Divider(color: Colors.white24, height: 16),
-                                _barraTratamiento('📦 Devolución a Proveedor', montoDevolucion, pzasDevolucion, totalGestionado, Colors.cyanAccent),
-                                _barraTratamiento('🏷️ Rescatado en Promoción', montoPromo, pzasPromo, totalGestionado, Colors.greenAccent),
-                                _barraTratamiento('📉 Merma / Destrucción', montoMerma, pzasMerma, totalGestionado, Colors.redAccent),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Proveedores por Caducar ($etiquetaPeriodo)',
-                            style: const TextStyle(fontSize: 14, color: Colors.amber, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          if (proveedoresOrdenados.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 16),
-                              child: Center(child: Text('¡Sin proveedores con vencimientos en este periodo!', style: TextStyle(color: Colors.greenAccent))),
-                            )
-                          else
-                            ...proveedoresOrdenados.map((item) {
-                              double pct = totalRiesgo > 0 ? item.value / totalRiesgo : 0;
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 6.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Expanded(child: Text(item.key, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12), overflow: TextOverflow.ellipsis)),
-                                        Text('MXN ${item.value.toStringAsFixed(2)}', style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 4),
-                                    LinearProgressIndicator(value: pct, backgroundColor: Colors.white10, color: Colors.amber, minHeight: 7, borderRadius: BorderRadius.circular(5)),
-                                  ],
-                                ),
-                              );
-                            }),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: activo ? Colors.black : Colors.white70,
+              fontWeight: FontWeight.bold,
+              fontSize: 10,
             ),
+            overflow: TextOverflow.ellipsis,
           ),
-        ],
+        ),
       ),
     );
   }
@@ -7387,7 +8394,15 @@ import 'sabana.dart';
 class PantallaMisiones extends StatefulWidget {
   final String idTiendaGlobal;
   final String usuarioActual;
-  const PantallaMisiones({super.key, required this.idTiendaGlobal, required this.usuarioActual});
+  final bool esJefe;
+  final String rolUsuario;
+  const PantallaMisiones({
+    super.key,
+    required this.idTiendaGlobal,
+    required this.usuarioActual,
+    this.esJefe = false,
+    this.rolUsuario = 'COLABORADOR',
+  });
 
   @override
   State<PantallaMisiones> createState() => _PantallaMisionesState();
@@ -7836,9 +8851,15 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
         descActual.toLowerCase().contains('articulo nuevo') ||
         descActual.toLowerCase().contains('sin nombre');
 
-    TextEditingController skuOficialCtrl = TextEditingController(text: codigoOriginal);
-    TextEditingController upcCtrl = TextEditingController(text: (m['ean'] ?? (codigoOriginal.length >= 11 ? codigoOriginal : '')).toString());
-    TextEditingController descCtrl = TextEditingController(text: esPlaceholder ? '' : descActual);
+    String skuInicial = (m['skuPropuestoPiso'] ?? codigoOriginal).toString().trim();
+    String eanInicial = (m['eanPropuestoPiso'] ?? m['ean'] ?? (codigoOriginal.length >= 11 ? codigoOriginal : '')).toString().trim();
+    String descInicial = (m['descPropuestaPiso'] ?? (esPlaceholder ? '' : descActual)).toString().trim();
+
+    TextEditingController skuOficialCtrl = TextEditingController(text: skuInicial);
+    TextEditingController upcCtrl = TextEditingController(text: eanInicial);
+    TextEditingController descCtrl = TextEditingController(text: descInicial);
+    bool autorizadoComoJefe = widget.esJefe ||
+        ['JEFE', 'GERENTE', 'DIRECTOR'].contains(widget.rolUsuario.toUpperCase());
 
     Map<String, dynamic>? datosMaestrosEncontrados;
     List<Map<String, dynamic>> sugerenciasCatalogo = [];
@@ -7942,6 +8963,28 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                           Text('📍 Ubicación física: $ubi', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 12)),
                           const SizedBox(height: 4),
                           Text('Código capturado originalmente: $codigoOriginal', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                          if (m['identificadoPorPiso'] != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '📝 Identificado en piso por ${m['identificadoPorPiso']}: SKU ${m['skuPropuestoPiso'] ?? ''} • ${m['descPropuestaPiso'] ?? ''}',
+                              style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                          ],
+                          if (!autorizadoComoJefe) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.orangeAccent),
+                              ),
+                              child: const Text(
+                                '🔒 Modo Colaborador: Puedes identificar el producto en físico y guardar los datos preliminares, pero solo el Jefe, Gerente o Director puede confirmar "GUARDAR EN TODAS LAS INSTANCIAS".',
+                                style: TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -8065,15 +9108,59 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                 onPressed: guardando ? null : () => Navigator.pop(ctx),
                 child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
               ),
+              if (!autorizadoComoJefe)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.amberAccent,
+                    side: const BorderSide(color: Colors.amberAccent),
+                  ),
+                  icon: const Icon(Icons.assignment_turned_in_outlined, size: 16),
+                  label: const Text('GUARDAR IDENTIFICACIÓN DE PISO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+                  onPressed: guardando
+                      ? null
+                      : () async {
+                          await docMision.reference.update({
+                            'skuPropuestoPiso': skuOficialCtrl.text.trim(),
+                            'eanPropuestoPiso': upcCtrl.text.trim(),
+                            'descPropuestaPiso': descCtrl.text.trim().toUpperCase(),
+                            'identificadoPorPiso': widget.usuarioActual,
+                          });
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('📝 Datos identificados guardados en la misión para revisión y confirmación del Jefe.'),
+                                backgroundColor: Colors.blueAccent,
+                              ),
+                            );
+                          }
+                        },
+                ),
               ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: autorizadoComoJefe ? Colors.purpleAccent : Colors.white12,
+                  foregroundColor: Colors.white,
+                ),
                 icon: guardando
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.save_as, size: 18),
-                label: const Text('GUARDAR EN TODAS LAS INSTANCIAS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                    : Icon(autorizadoComoJefe ? Icons.save_as : Icons.lock, size: 18, color: autorizadoComoJefe ? Colors.white : Colors.orangeAccent),
+                label: Text(
+                  autorizadoComoJefe ? 'GUARDAR EN TODAS LAS INSTANCIAS' : '🔒 GUARDAR EN TODAS LAS INSTANCIAS (SOLO JEFE)',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5),
+                ),
                 onPressed: guardando
                     ? null
                     : () async {
+                        if (!autorizadoComoJefe) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('🔒 Acción restringida: Únicamente el Jefe, Gerente o Director puede confirmar "GUARDAR EN TODAS LAS INSTANCIAS". Usa "Guardar Identificación de Piso" para dejarle los datos listos.'),
+                              backgroundColor: Colors.redAccent,
+                              duration: Duration(seconds: 4),
+                            ),
+                          );
+                          return;
+                        }
                         String skuNuevo = skuOficialCtrl.text.trim();
                         if (skuNuevo.isEmpty) return;
                         setModalState(() => guardando = true);
@@ -9502,7 +10589,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
     List<Widget> pantallas = [
       PantallaEscaner(estaActiva: _indiceActual == 0, usuarioRegistra: widget.nombreUsuario, idTiendaGlobal: widget.idTiendaGlobal),
       PantallaDashboard(key: _dashboardKey, usuarioActual: widget.nombreUsuario, idTiendaGlobal: widget.idTiendaGlobal),
-      PantallaMisiones(idTiendaGlobal: widget.idTiendaGlobal, usuarioActual: widget.nombreUsuario),
+      PantallaMisiones(idTiendaGlobal: widget.idTiendaGlobal, usuarioActual: widget.nombreUsuario, esJefe: widget.esJefe, rolUsuario: widget.rolUsuario),
     ];
     List<BottomNavigationBarItem> items = [
       const BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Escáner'),
@@ -10075,6 +11162,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _infoRow("MARCA", JerarquiaUbicacionHelper.obtenerMarcaVisual(d)),
               _infoRow("SKU", d['sku']),
               _infoRow("UPC", JerarquiaUbicacionHelper.obtenerUpcVisual(d)),
               _infoRow("PROVEEDOR", d['nombreProveedor']),
@@ -11480,6 +12568,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                             const SizedBox(height: 2),
+                                            Text(
+                                              'Marca: ${JerarquiaUbicacionHelper.obtenerMarcaVisual(d)}',
+                                              style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                                            ),
                                             Text(
                                               'SKU: ${d['sku'] ?? 'ND'}',
                                               style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
