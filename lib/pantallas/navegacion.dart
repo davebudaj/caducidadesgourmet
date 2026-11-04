@@ -250,7 +250,7 @@ class _NavegacionPrincipalState extends State<NavegacionPrincipal> {
     List<Widget> pantallas = [
       PantallaEscaner(estaActiva: _indiceActual == 0, usuarioRegistra: widget.nombreUsuario, idTiendaGlobal: widget.idTiendaGlobal),
       PantallaDashboard(key: _dashboardKey, usuarioActual: widget.nombreUsuario, idTiendaGlobal: widget.idTiendaGlobal),
-      PantallaMisiones(idTiendaGlobal: widget.idTiendaGlobal, usuarioActual: widget.nombreUsuario),
+      PantallaMisiones(idTiendaGlobal: widget.idTiendaGlobal, usuarioActual: widget.nombreUsuario, esJefe: widget.esJefe, rolUsuario: widget.rolUsuario),
     ];
     List<BottomNavigationBarItem> items = [
       const BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Escáner'),

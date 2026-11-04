@@ -45,6 +45,81 @@ class JerarquiaUbicacionHelper {
     }
   }
 
+  static const List<String> _marcasConocidas = [
+    'COME VERDE', 'PATRONA MIA', 'PUNTA CIELO', 'LA PARROQUIA', 'LEE KUM KEE',
+    'SAN PELLEGRINO', 'HUY FONG', 'DE CECCO', 'SAMYANG', 'POCKY', 'GLICO',
+    'SATORU', 'SUPERLIFE', 'ZUMITAN', 'IAMARANTH', 'LOTTE', 'NONGSHIM',
+    'PALDO', 'HAITAI', 'CROWN', 'ORION', 'MEIJI', 'MORINAGA', 'BOURBON',
+    'KASUGAI', 'MARUCHAN', 'KIKKOMAN', 'TAJIN', 'VALENTINA', 'CHOLULA',
+    'TABASCO', 'PERRIER', 'EVIAN', 'FIJI', 'VOSS', 'ILLY', 'LAVAZZA',
+    'NESCAFE', 'STARBUCKS', 'TWININGS', 'TAZO', 'STASH', 'YOGI', 'HARNEY',
+    'LINDT', 'GHIRARDELLI', 'GODIVA', 'FERRERO', 'KINDER', 'NUTELLA',
+    'MILKA', 'TOBLERONE', 'VALOR', 'BARILLA', 'GALLO', 'BORGES', 'BERIO'
+  ];
+
+  static const Set<String> _palabrasGenericasProducto = {
+    'GALLETA', 'GALLETAS', 'SALSA', 'SOPA', 'RAMEN', 'PASTA', 'FIDEO',
+    'AGUA', 'MINERAL', 'CAFE', 'SOLUBLE', 'TE', 'BEBIDA', 'REFRESCO',
+    'JUGO', 'DULCE', 'GOMITA', 'GOMITAS', 'CHOCOLATE', 'CHOC', 'ALMENDRA',
+    'FRESA', 'VAINILLA', 'LIMON', 'MORA', 'AZUL', 'VERDE', 'ROJO', 'NEGRO',
+    'BLANCO', 'PICANTE', 'HOT', 'SPICY', 'ORIGINAL', 'CLASICO', 'ORGANICO',
+    'ORG', 'SIN', 'AZUCAR', 'LIGHT', 'MINI', 'BIG', 'BOWL', 'CUP', 'PET',
+    'LATA', 'FRASCO', 'BOLSA', 'CAJA', 'PAPA', 'PAPAS', 'ACEITE', 'AGUACATE',
+    'MIX', 'GARAP', 'FRUTA', 'MONJE', 'OBLEAS', 'AJONJOLI', 'PARA', 'SUSHI',
+    'CHICKEN', 'POLLO', 'RES', 'CAMARON', 'HABANERO', 'QUESO', 'LECHE'
+  };
+
+  static String obtenerMarcaVisual(Map<String, dynamic>? d) {
+    if (d == null) return 'SIN MARCA';
+    String marcaExplicita = (d['marca'] ?? '').toString().trim().toUpperCase();
+    if (marcaExplicita.isNotEmpty && marcaExplicita != 'ND' && marcaExplicita != 'NULL') {
+      return marcaExplicita;
+    }
+
+    String desc = (d['descripcion'] ?? '').toString().trim().toUpperCase();
+    if (desc.isEmpty || desc.contains('ARTÍCULO NUEVO') || desc.contains('ARTICULO NUEVO')) {
+      return 'POR VALIDAR';
+    }
+
+    for (String m in _marcasConocidas) {
+      if (desc.contains(m)) return m;
+    }
+
+    // Limpiar gramajes al final tipo ".150", ".0462", "500ML", "1.000"
+    String sinGramaje = desc
+        .replaceAll(RegExp(r'(\s*\.[0-9]+|\s+[0-9]+(\.[0-9]+)?\s*(G|GR|KG|ML|L|LT|OZ|PZ|PZA|PZAS))+$'), '')
+        .replaceAll(RegExp(r'[^A-ZÁÉÍÓÚÑ0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    List<String> tokens = sinGramaje
+        .split(' ')
+        .where((t) => t.length >= 3 && !RegExp(r'^[0-9]+$').hasMatch(t))
+        .toList();
+
+    for (int i = tokens.length - 1; i >= 0; i--) {
+      String cand = tokens[i];
+      if (!_palabrasGenericasProducto.contains(cand)) {
+        return cand;
+      }
+    }
+
+    String prov = (d['nombreProveedor'] ?? '').toString().trim().toUpperCase();
+    if (prov.isNotEmpty && prov != 'ND' && !prov.contains('SIN MATCH') && !prov.contains('TEMPORAL')) {
+      String provLimpio = prov
+          .replaceAll(RegExp(r'(S\s*A\s*DE\s*C\s*V|S\.A\.\s*DE\s*C\.V\.|SAPI\s*DE\s*C\s*V|S\s*DE\s*R\s*L\s*DE\s*C\s*V|S\s*A\s*P\s*I|COMERCIAL|DISTRIBUIDORA|IMPORTADORA|GRUPO|PRODUCTOS|ALIMENTOS|MEXICO)'), '')
+          .replaceAll(RegExp(r'[^A-ZÁÉÍÓÚÑ0-9\s]'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (provLimpio.isNotEmpty) {
+        List<String> pTokens = provLimpio.split(' ');
+        return pTokens.take(2).join(' ');
+      }
+    }
+
+    return tokens.isNotEmpty ? tokens.last : 'GOURMET';
+  }
+
   static String obtenerUpcVisual(Map<String, dynamic>? d) {
     if (!_cacheUpcListo && !_cargandoCacheUpc) {
       precargarCacheUpc();

@@ -8,7 +8,15 @@ import 'sabana.dart';
 class PantallaMisiones extends StatefulWidget {
   final String idTiendaGlobal;
   final String usuarioActual;
-  const PantallaMisiones({super.key, required this.idTiendaGlobal, required this.usuarioActual});
+  final bool esJefe;
+  final String rolUsuario;
+  const PantallaMisiones({
+    super.key,
+    required this.idTiendaGlobal,
+    required this.usuarioActual,
+    this.esJefe = false,
+    this.rolUsuario = 'COLABORADOR',
+  });
 
   @override
   State<PantallaMisiones> createState() => _PantallaMisionesState();
@@ -457,9 +465,15 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
         descActual.toLowerCase().contains('articulo nuevo') ||
         descActual.toLowerCase().contains('sin nombre');
 
-    TextEditingController skuOficialCtrl = TextEditingController(text: codigoOriginal);
-    TextEditingController upcCtrl = TextEditingController(text: (m['ean'] ?? (codigoOriginal.length >= 11 ? codigoOriginal : '')).toString());
-    TextEditingController descCtrl = TextEditingController(text: esPlaceholder ? '' : descActual);
+    String skuInicial = (m['skuPropuestoPiso'] ?? codigoOriginal).toString().trim();
+    String eanInicial = (m['eanPropuestoPiso'] ?? m['ean'] ?? (codigoOriginal.length >= 11 ? codigoOriginal : '')).toString().trim();
+    String descInicial = (m['descPropuestaPiso'] ?? (esPlaceholder ? '' : descActual)).toString().trim();
+
+    TextEditingController skuOficialCtrl = TextEditingController(text: skuInicial);
+    TextEditingController upcCtrl = TextEditingController(text: eanInicial);
+    TextEditingController descCtrl = TextEditingController(text: descInicial);
+    bool autorizadoComoJefe = widget.esJefe ||
+        ['JEFE', 'GERENTE', 'DIRECTOR'].contains(widget.rolUsuario.toUpperCase());
 
     Map<String, dynamic>? datosMaestrosEncontrados;
     List<Map<String, dynamic>> sugerenciasCatalogo = [];
@@ -563,6 +577,28 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                           Text('📍 Ubicación física: $ubi', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 12)),
                           const SizedBox(height: 4),
                           Text('Código capturado originalmente: $codigoOriginal', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                          if (m['identificadoPorPiso'] != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '📝 Identificado en piso por ${m['identificadoPorPiso']}: SKU ${m['skuPropuestoPiso'] ?? ''} • ${m['descPropuestaPiso'] ?? ''}',
+                              style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                          ],
+                          if (!autorizadoComoJefe) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.orangeAccent),
+                              ),
+                              child: const Text(
+                                '🔒 Modo Colaborador: Puedes identificar el producto en físico y guardar los datos preliminares, pero solo el Jefe, Gerente o Director puede confirmar "GUARDAR EN TODAS LAS INSTANCIAS".',
+                                style: TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -686,15 +722,59 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                 onPressed: guardando ? null : () => Navigator.pop(ctx),
                 child: const Text('CANCELAR', style: TextStyle(color: Colors.white54)),
               ),
+              if (!autorizadoComoJefe)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.amberAccent,
+                    side: const BorderSide(color: Colors.amberAccent),
+                  ),
+                  icon: const Icon(Icons.assignment_turned_in_outlined, size: 16),
+                  label: const Text('GUARDAR IDENTIFICACIÓN DE PISO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+                  onPressed: guardando
+                      ? null
+                      : () async {
+                          await docMision.reference.update({
+                            'skuPropuestoPiso': skuOficialCtrl.text.trim(),
+                            'eanPropuestoPiso': upcCtrl.text.trim(),
+                            'descPropuestaPiso': descCtrl.text.trim().toUpperCase(),
+                            'identificadoPorPiso': widget.usuarioActual,
+                          });
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('📝 Datos identificados guardados en la misión para revisión y confirmación del Jefe.'),
+                                backgroundColor: Colors.blueAccent,
+                              ),
+                            );
+                          }
+                        },
+                ),
               ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: autorizadoComoJefe ? Colors.purpleAccent : Colors.white12,
+                  foregroundColor: Colors.white,
+                ),
                 icon: guardando
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.save_as, size: 18),
-                label: const Text('GUARDAR EN TODAS LAS INSTANCIAS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                    : Icon(autorizadoComoJefe ? Icons.save_as : Icons.lock, size: 18, color: autorizadoComoJefe ? Colors.white : Colors.orangeAccent),
+                label: Text(
+                  autorizadoComoJefe ? 'GUARDAR EN TODAS LAS INSTANCIAS' : '🔒 GUARDAR EN TODAS LAS INSTANCIAS (SOLO JEFE)',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5),
+                ),
                 onPressed: guardando
                     ? null
                     : () async {
+                        if (!autorizadoComoJefe) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('🔒 Acción restringida: Únicamente el Jefe, Gerente o Director puede confirmar "GUARDAR EN TODAS LAS INSTANCIAS". Usa "Guardar Identificación de Piso" para dejarle los datos listos.'),
+                              backgroundColor: Colors.redAccent,
+                              duration: Duration(seconds: 4),
+                            ),
+                          );
+                          return;
+                        }
                         String skuNuevo = skuOficialCtrl.text.trim();
                         if (skuNuevo.isEmpty) return;
                         setModalState(() => guardando = true);

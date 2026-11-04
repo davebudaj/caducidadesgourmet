@@ -528,6 +528,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _infoRow("MARCA", JerarquiaUbicacionHelper.obtenerMarcaVisual(d)),
               _infoRow("SKU", d['sku']),
               _infoRow("UPC", JerarquiaUbicacionHelper.obtenerUpcVisual(d)),
               _infoRow("PROVEEDOR", d['nombreProveedor']),
@@ -1933,6 +1934,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                             const SizedBox(height: 2),
+                                            Text(
+                                              'Marca: ${JerarquiaUbicacionHelper.obtenerMarcaVisual(d)}',
+                                              style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                                            ),
                                             Text(
                                               'SKU: ${d['sku'] ?? 'ND'}',
                                               style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
