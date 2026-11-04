@@ -55,13 +55,11 @@ class PantallaGraficas extends StatefulWidget {
 
 class _PantallaGraficasState extends State<PantallaGraficas> {
   int _indiceTocado = -1;
-  // Primera vista por defecto: VISTA MENSUAL con el mes en curso
   bool _vistaMensual = true;
   bool _sincronizando = false;
   int _anioAcumulado = DateTime.now().year;
   DateTime _mesSeleccionado = DateTime(DateTime.now().year, DateTime.now().month, 1);
 
-  // 0 = Los 3 Rubros, 1 = Proveedores, 2 = Grupos de Artículos, 3 = Marcas
   int _rubroSeleccionado = 0;
 
   static const List<String> _meses = [
@@ -81,10 +79,25 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     _verificarYEmpaquetarDatos();
   }
 
+  String _limpiarTextoMojibake(String raw) {
+    return raw
+        .replaceAll('Ã‘', 'Ñ')
+        .replaceAll('Ã±', 'ñ')
+        .replaceAll('Ã\x91', 'Ñ')
+        .replaceAll('Ã\x81', 'Á')
+        .replaceAll('Ã\x89', 'É')
+        .replaceAll('Ã\x8d', 'Í')
+        .replaceAll('Ã\x93', 'Ó')
+        .replaceAll('Ã\x9a', 'Ú')
+        .replaceAll('ANTAÃ\ufffdO', 'ANTAÑO')
+        .replaceAll('SEÃ\ufffdOR', 'SEÑOR')
+        .replaceAll('Ã\ufffd', 'Ñ');
+  }
+
   Future<void> _verificarYEmpaquetarDatos() async {
     try {
       var docEmp = await _refTienda.collection('resumen_financiero').doc('empaquetado_inventario').get();
-      if (!docEmp.exists) {
+      if (!docEmp.exists || docEmp.data()?['versionEsquema'] != 2) {
         await _reconstruirResumenYEmpaquetado(silencioso: true);
       } else {
         Timestamp? ts = docEmp.data()?['ultimaActualizacion'];
@@ -101,9 +114,13 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     required double valor,
     required int cant,
     required int dias,
+    required String sku,
+    required String desc,
+    required String ubi,
     required String prov,
     required String grupo,
     required String marca,
+    required bool esVistaMensualKey,
   }) {
     var p = periodos.putIfAbsent(keyPeriodo, () => {
       'total': 0.0,
@@ -115,30 +132,58 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       'pzasTotal': 0,
       'pzasRiesgo': 0,
       'lotes': 0,
+      'capPiso': 0.0,
+      'capBodega': 0.0,
+      'capDisplay': 0.0,
+      'topSkus': <Map<String, dynamic>>[],
       'proveedores': <String, Map<String, dynamic>>{},
       'grupos': <String, Map<String, dynamic>>{},
       'marcas': <String, Map<String, dynamic>>{},
     });
 
-    bool enRiesgo = dias <= 30;
+    String ubiUp = ubi.toUpperCase();
+    bool estaEnBodega = ubiUp.contains('BODEGA');
+    // Un lote está en riesgo operativo si vence en <=30 días, o si en el mes analizado sigue guardado en BODEGA sin exhibirse en piso
+    bool enRiesgoOperativo = (dias <= 30) || (esVistaMensualKey && estaEnBodega);
+
     p['total'] = (p['total'] as double) + valor;
     p['pzasTotal'] = (p['pzasTotal'] as int) + cant;
     p['lotes'] = (p['lotes'] as int) + 1;
 
+    if (estaEnBodega) {
+      p['capBodega'] = (p['capBodega'] as double) + valor;
+    } else if (ubiUp.contains('DISPLAY')) {
+      p['capDisplay'] = (p['capDisplay'] as double) + valor;
+    } else {
+      p['capPiso'] = (p['capPiso'] as double) + valor;
+    }
+
     if (dias < 0) {
       p['caducado'] = (p['caducado'] as double) + valor;
-      p['riesgo'] = (p['riesgo'] as double) + valor;
-      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
     } else if (dias <= 14) {
       p['critico'] = (p['critico'] as double) + valor;
-      p['riesgo'] = (p['riesgo'] as double) + valor;
-      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
     } else if (dias <= 30) {
       p['proximo'] = (p['proximo'] as double) + valor;
-      p['riesgo'] = (p['riesgo'] as double) + valor;
-      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
     } else {
       p['sano'] = (p['sano'] as double) + valor;
+    }
+
+    if (enRiesgoOperativo) {
+      p['riesgo'] = (p['riesgo'] as double) + valor;
+      p['pzasRiesgo'] = (p['pzasRiesgo'] as int) + cant;
+    }
+
+    if (valor > 0) {
+      var listaSkus = p['topSkus'] as List<Map<String, dynamic>>;
+      listaSkus.add({
+        'sku': sku,
+        'descripcion': desc,
+        'marca': marca,
+        'ubicacion': ubi,
+        'dias': dias,
+        'pzas': cant,
+        'monto': valor,
+      });
     }
 
     void sumarRubro(String mapKey, String nombreClave) {
@@ -151,7 +196,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       });
       item['total'] = (item['total'] as double) + valor;
       item['pzas'] = (item['pzas'] as int) + cant;
-      if (enRiesgo) {
+      if (enRiesgoOperativo) {
         item['riesgo'] = (item['riesgo'] as double) + valor;
         item['pzasRiesgo'] = (item['pzasRiesgo'] as int) + cant;
       }
@@ -174,13 +219,12 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       double montoBodega90d = 0;
       int lotesArticulosNuevos = 0;
       int lotesEdicionTemporal = 0;
-      double capitalPiso = 0;
-      double capitalBodega = 0;
-      double capitalDisplay = 0;
+      double capitalPisoGlobal = 0;
+      double capitalBodegaGlobal = 0;
+      double capitalDisplayGlobal = 0;
 
       Map<String, double> riesgoCriticoPorProv = {};
       Map<String, double> riesgoPorUbicacion = {};
-      List<Map<String, dynamic>> lotesEnRiesgoPareto = [];
 
       for (var doc in invSnap.docs) {
         var data = doc.data();
@@ -188,7 +232,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
         String ubiUp = ubi.toUpperCase();
         if (ubiUp == 'EN TRÁNSITO') continue;
 
-        String desc = (data['descripcion'] ?? '').toString();
+        String desc = _limpiarTextoMojibake((data['descripcion'] ?? '').toString());
         if (desc == 'Artículo Nuevo' || desc == 'ARTÍCULO NUEVO / NO EN CATÁLOGO') {
           lotesArticulosNuevos++;
         } else if (data['edicionTemporal'] == true) {
@@ -205,30 +249,19 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
         double valor = cant * precio;
 
         if (ubiUp.contains('BODEGA')) {
-          capitalBodega += valor;
+          capitalBodegaGlobal += valor;
         } else if (ubiUp.contains('DISPLAY')) {
-          capitalDisplay += valor;
+          capitalDisplayGlobal += valor;
         } else {
-          capitalPiso += valor;
+          capitalPisoGlobal += valor;
         }
 
-        String prov = (data['nombreProveedor'] ?? 'DESCONOCIDO').toString().trim();
+        String prov = _limpiarTextoMojibake((data['nombreProveedor'] ?? 'DESCONOCIDO').toString().trim());
         if (prov.isEmpty) prov = 'DESCONOCIDO';
-        String grupo = (data['nombreGpoArticulos'] ?? 'SIN GRUPO').toString().trim();
+        String grupo = _limpiarTextoMojibake((data['nombreGpoArticulos'] ?? 'SIN GRUPO').toString().trim());
         if (grupo.isEmpty) grupo = 'SIN GRUPO';
-        String marca = JerarquiaUbicacionHelper.obtenerMarcaVisual(data);
-
-        if (dias <= 30 && valor > 0) {
-          lotesEnRiesgoPareto.add({
-            'sku': (data['sku'] ?? 'ND').toString(),
-            'descripcion': desc.isEmpty ? 'SIN NOMBRE' : desc,
-            'marca': marca,
-            'ubicacion': ubi,
-            'dias': dias,
-            'pzas': cant,
-            'monto': valor,
-          });
-        }
+        String marca = _limpiarTextoMojibake(JerarquiaUbicacionHelper.obtenerMarcaVisual(data));
+        String sku = (data['sku'] ?? 'ND').toString();
 
         if (dias <= 15) {
           lotesCriticos15d++;
@@ -250,9 +283,13 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
           valor: valor,
           cant: cant,
           dias: dias,
+          sku: sku,
+          desc: desc.isEmpty ? 'SIN NOMBRE' : desc,
+          ubi: ubi,
           prov: prov,
           grupo: grupo,
           marca: marca,
+          esVistaMensualKey: true,
         );
         _acumularEnPeriodo(
           periodos,
@@ -260,19 +297,28 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
           valor: valor,
           cant: cant,
           dias: dias,
+          sku: sku,
+          desc: desc.isEmpty ? 'SIN NOMBRE' : desc,
+          ubi: ubi,
           prov: prov,
           grupo: grupo,
           marca: marca,
+          esVistaMensualKey: false,
         );
       }
 
-      lotesEnRiesgoPareto.sort((a, b) => (b['monto'] as double).compareTo(a['monto'] as double));
-      var top10SkusPareto = lotesEnRiesgoPareto.take(10).toList();
+      // Para cada periodo (mes y año), ordenar su propio Top 10 SKUs por mayor impacto en pesos
+      for (var p in periodos.values) {
+        var listaSkus = p['topSkus'] as List<Map<String, dynamic>>;
+        listaSkus.sort((a, b) => (b['monto'] as double).compareTo(a['monto'] as double));
+        p['topSkus'] = listaSkus.take(10).toList();
+      }
 
       var topProvsCriticos = riesgoCriticoPorProv.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
       var topUbisCriticas = riesgoPorUbicacion.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
       await _refTienda.collection('resumen_financiero').doc('empaquetado_inventario').set({
+        'versionEsquema': 2,
         'periodos': periodos,
         'diagnostico_operativo': {
           'montoCritico15d': montoCritico15d,
@@ -281,10 +327,9 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
           'montoBodega90d': montoBodega90d,
           'lotesArticulosNuevos': lotesArticulosNuevos,
           'lotesEdicionTemporal': lotesEdicionTemporal,
-          'capitalPiso': capitalPiso,
-          'capitalBodega': capitalBodega,
-          'capitalDisplay': capitalDisplay,
-          'top10SkusPareto': top10SkusPareto,
+          'capitalPiso': capitalPisoGlobal,
+          'capitalBodega': capitalBodegaGlobal,
+          'capitalDisplay': capitalDisplayGlobal,
           'provFoco': topProvsCriticos.isNotEmpty
               ? '${topProvsCriticos.first.key} (MXN ${topProvsCriticos.first.value.toStringAsFixed(2)})'
               : 'Sin proveedores en riesgo crítico',
@@ -347,7 +392,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       if (!silencioso && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Datos empaquetados y sincronizados en la base de datos.'),
+            content: Text('✅ Datos empaquetados y sincronizados por mes y año.'),
             backgroundColor: Colors.green,
           ),
         );
@@ -412,6 +457,8 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
   ) {
     if (rawMapa == null || rawMapa.isEmpty) return [];
     List<Map<String, dynamic>> lista = [];
+    int numElementos = rawMapa.length;
+    double participacionMediaEsperada = numElementos > 0 ? (100.0 / numElementos) : 0.0;
 
     for (var entry in rawMapa.entries) {
       var m = Map<String, dynamic>.from(entry.value as Map);
@@ -423,10 +470,13 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
 
       double pctRiesgoInterno = (rsg / tot) * 100.0;
       double pctParticipacionTotal = totalInventarioPeriodo > 0 ? (tot / totalInventarioPeriodo) * 100.0 : 0.0;
-      double desviacion = pctRiesgoInterno - pctRiesgoGlobalPeriodo;
+      // Si el periodo tiene riesgo operativo, mide desviación de riesgo; si todo está en piso lejano, mide desviación de concentración de inventario
+      double desviacion = pctRiesgoGlobalPeriodo > 0
+          ? (pctRiesgoInterno - pctRiesgoGlobalPeriodo)
+          : (pctParticipacionTotal - participacionMediaEsperada);
 
       lista.add({
-        'nombre': entry.key,
+        'nombre': _limpiarTextoMojibake(entry.key),
         'total': tot,
         'riesgo': rsg,
         'pzas': pzas,
@@ -568,8 +618,13 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     Map<String, dynamic> diagOp,
   ) {
     DateTime hoy = DateTime.now();
+    // El análisis ahora se mueve dinámicamente con el mes y año seleccionado por el usuario
     int anioAct = _vistaMensual ? _mesSeleccionado.year : _anioAcumulado;
     int mesAct = _vistaMensual ? _mesSeleccionado.month : hoy.month;
+
+    DateTime mesBaseProyeccion = _vistaMensual
+        ? DateTime(_mesSeleccionado.year, _mesSeleccionado.month, 1)
+        : DateTime(anioAct, hoy.month, 1);
 
     DateTime mesAntDt = DateTime(anioAct, mesAct - 1, 1);
     String keyMesActual = 'M_${anioAct}_$mesAct';
@@ -586,11 +641,12 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     var tratMesAct = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: true, anio: anioAct, mes: mesAct);
     var tratMesAnt = _obtenerTratamientosDePeriodo(tratamientosPorAnio, mensual: true, anio: mesAntDt.year, mes: mesAntDt.month);
 
+    // Proyección 3 meses futuros A PARTIR DEL MES SELECCIONADO (Mes +1, Mes +2, Mes +3)
     List<Map<String, dynamic>> proyeccion3Meses = [];
     double sumaProy3M = 0.0;
     int pzasProy3M = 0;
     for (int i = 1; i <= 3; i++) {
-      DateTime mFut = DateTime(hoy.year, hoy.month + i, 1);
+      DateTime mFut = DateTime(mesBaseProyeccion.year, mesBaseProyeccion.month + i, 1);
       String kFut = 'M_${mFut.year}_${mFut.month}';
       var dFut = Map<String, dynamic>.from((todosPeriodos[kFut] ?? {}) as Map);
       double totFut = double.tryParse((dFut['total'] ?? 0).toString()) ?? 0.0;
@@ -600,16 +656,17 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
       pzasProy3M += pzFut;
       proyeccion3Meses.add({
         'etiqueta': '${_meses[mFut.month - 1]} ${mFut.year}',
-        'horizonte': '${i * 30} días',
+        'horizonte': '+${i * 30} días',
         'monto': totFut,
         'pzas': pzFut,
         'lotes': lotesFut,
       });
     }
 
-    int y0 = hoy.year;
-    int y1 = hoy.year - 1;
-    int y2 = hoy.year - 2;
+    // Acumulado Anual dinámico del año que se está consultando (ej. 2027 si ves Enero 2027, o 2026 si ves 2026)
+    int y0 = anioAct;
+    int y1 = anioAct - 1;
+    int y2 = anioAct - 2;
     var dAnio0 = Map<String, dynamic>.from((todosPeriodos['A_$y0'] ?? {}) as Map);
     var dAnio1 = Map<String, dynamic>.from((todosPeriodos['A_$y1'] ?? {}) as Map);
     var dAnio2 = Map<String, dynamic>.from((todosPeriodos['A_$y2'] ?? {}) as Map);
@@ -626,19 +683,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     double mermaPctY0 = tratY0['total']! > 0 ? (tratY0['merma']! / tratY0['total']!) * 100.0 : 0.0;
     double diffMetaRescate = rescateY0 - 75.0;
 
-    double capPiso = double.tryParse((diagOp['capitalPiso'] ?? 0).toString()) ?? 0.0;
-    double capBodega = double.tryParse((diagOp['capitalBodega'] ?? 0).toString()) ?? 0.0;
-    double capDisplay = double.tryParse((diagOp['capitalDisplay'] ?? 0).toString()) ?? 0.0;
-    double capTotalAreas = capPiso + capBodega + capDisplay;
-    double pctBodega = capTotalAreas > 0 ? (capBodega / capTotalAreas) * 100.0 : 0.0;
-
-    List<Map<String, dynamic>> top10Skus = [];
-    if (diagOp['top10SkusPareto'] is List) {
-      for (var item in (diagOp['top10SkusPareto'] as List)) {
-        top10Skus.add(Map<String, dynamic>.from(item as Map));
-      }
-    }
-
+    // Datos específicos del periodo activo (Mes seleccionado o Año seleccionado)
     String keyActiva = _vistaMensual ? keyMesActual : 'A_$_anioAcumulado';
     String nombrePeriodoActivo = _vistaMensual
         ? '${_meses[_mesSeleccionado.month - 1]} ${_mesSeleccionado.year}'
@@ -648,23 +693,38 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     double riesgoAct = double.tryParse((datosActivos['riesgo'] ?? 0).toString()) ?? 0.0;
     double pctRiesgoGlobalAct = totalAct > 0 ? (riesgoAct / totalAct) * 100.0 : 0.0;
 
+    // Capital por Área (Piso / Bodega / Display) exclusivo del mes o año seleccionado
+    double capPiso = double.tryParse((datosActivos['capPiso'] ?? 0).toString()) ?? 0.0;
+    double capBodega = double.tryParse((datosActivos['capBodega'] ?? 0).toString()) ?? 0.0;
+    double capDisplay = double.tryParse((datosActivos['capDisplay'] ?? 0).toString()) ?? 0.0;
+    double capTotalAreas = capPiso + capBodega + capDisplay;
+    double pctBodega = capTotalAreas > 0 ? (capBodega / capTotalAreas) * 100.0 : 0.0;
+
+    // Top 10 SKUs (Pareto 80/20) exclusivo del mes o año seleccionado
+    List<Map<String, dynamic>> top10Skus = [];
+    if (datosActivos['topSkus'] is List) {
+      for (var item in (datosActivos['topSkus'] as List)) {
+        top10Skus.add(Map<String, dynamic>.from(item as Map));
+      }
+    }
+
     var listaProvs = _procesarListaRubro(datosActivos['proveedores'] as Map<String, dynamic>?, totalAct, pctRiesgoGlobalAct);
     var listaGrupos = _procesarListaRubro(datosActivos['grupos'] as Map<String, dynamic>?, totalAct, pctRiesgoGlobalAct);
     var listaMarcas = _procesarListaRubro(datosActivos['marcas'] as Map<String, dynamic>?, totalAct, pctRiesgoGlobalAct);
 
     String topProvTxt = listaProvs.isNotEmpty
-        ? '${listaProvs.first['nombre']} (Riesgo: MXN ${(listaProvs.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaProvs.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaProvs.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaProvs.first['desviacion'] as double).toStringAsFixed(1)}%)'
+        ? '${listaProvs.first['nombre']} (Riesgo/Bodega: MXN ${(listaProvs.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaProvs.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaProvs.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaProvs.first['desviacion'] as double).toStringAsFixed(1)}%)'
         : 'Sin exposición relevante';
     String topGrupoTxt = listaGrupos.isNotEmpty
-        ? '${listaGrupos.first['nombre']} (Riesgo: MXN ${(listaGrupos.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaGrupos.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaGrupos.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaGrupos.first['desviacion'] as double).toStringAsFixed(1)}%)'
+        ? '${listaGrupos.first['nombre']} (Riesgo/Bodega: MXN ${(listaGrupos.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaGrupos.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaGrupos.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaGrupos.first['desviacion'] as double).toStringAsFixed(1)}%)'
         : 'Sin exposición relevante';
     String topMarcaTxt = listaMarcas.isNotEmpty
-        ? '${listaMarcas.first['nombre']} (Riesgo: MXN ${(listaMarcas.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaMarcas.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaMarcas.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaMarcas.first['desviacion'] as double).toStringAsFixed(1)}%)'
+        ? '${listaMarcas.first['nombre']} (Riesgo/Bodega: MXN ${(listaMarcas.first['riesgo'] as double).toStringAsFixed(2)} • ${(listaMarcas.first['pctRiesgo'] as double).toStringAsFixed(1)}% • Desv: ${(listaMarcas.first['desviacion'] as double) >= 0 ? "+" : ""}${(listaMarcas.first['desviacion'] as double).toStringAsFixed(1)}%)'
         : 'Sin exposición relevante';
 
     String textoTopSkus = top10Skus.isEmpty
-        ? 'Sin SKUs críticos ≤30 días en este momento.'
-        : top10Skus.take(5).map((s) => '  • [${s['sku']}] ${s['marca']} - ${s['descripcion']} (${s['dias']}d) ➔ MXN ${(s['monto'] as double).toStringAsFixed(2)} en ${s['ubicacion']}').join('\n');
+        ? 'Sin SKUs registrados en $nombrePeriodoActivo.'
+        : top10Skus.take(5).map((s) => '  • [${s['sku']}] ${s['marca']} - ${s['descripcion']} (${s['pzas']} pz) ➔ MXN ${(s['monto'] as double).toStringAsFixed(2)} en ${s['ubicacion']}').join('\n');
 
     showDialog(
       context: context,
@@ -672,14 +732,14 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
         backgroundColor: const Color(0xFF161620),
         insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.amber, width: 2)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.psychology, color: Colors.amber, size: 24),
-            SizedBox(width: 8),
+            const Icon(Icons.psychology, color: Colors.amber, size: 24),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                '🧠 Diagnóstico Profundo IA (Mensual • 3M • Anual)',
-                style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
+                '🧠 Diagnóstico Profundo IA • $nombrePeriodoActivo',
+                style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13.5),
               ),
             ),
           ],
@@ -695,7 +755,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                   icono: Icons.calendar_month,
                   color: Colors.cyanAccent,
                   titulo: '1. Diagnóstico Mensual y Variación MoM (${_meses[mesAct - 1]} $anioAct vs ${_meses[mesAntDt.month - 1]})',
-                  detalle: '• Inventario que vence en el mes: MXN ${invMesAct.toStringAsFixed(2)} (En riesgo ≤30d: MXN ${rsgMesAct.toStringAsFixed(2)} • ${pctRsgMesAct.toStringAsFixed(1)}%).\n'
+                  detalle: '• Inventario que vence en ${_meses[mesAct - 1]} $anioAct: MXN ${invMesAct.toStringAsFixed(2)} (En riesgo / Bodega: MXN ${rsgMesAct.toStringAsFixed(2)} • ${pctRsgMesAct.toStringAsFixed(1)}%).\n'
                       '• Variación de inventario vs mes anterior (MoM): ${_formatearVariacion(invMesAct, invMesAnt)} (Mes previo: MXN ${invMesAnt.toStringAsFixed(2)}).\n'
                       '• Tratamientos aplicados en el mes: MXN ${tratMesAct['total']!.toStringAsFixed(2)} vs MXN ${tratMesAnt['total']!.toStringAsFixed(2)} (${_formatearVariacion(tratMesAct['total']!, tratMesAnt['total']!)}).',
                 ),
@@ -703,24 +763,24 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                 _tarjetaInsightIA(
                   icono: Icons.auto_graph,
                   color: Colors.orangeAccent,
-                  titulo: '2. Proyección de Caducidades a 3 Meses Futuros (30 / 60 / 90 Días)',
-                  detalle: '• Capital total proyectado a vencer en los próximos 3 meses: MXN ${sumaProy3M.toStringAsFixed(2)} ($pzasProy3M pzas).\n' +
+                  titulo: '2. Proyección de los 3 Meses Siguientes a ${_meses[mesBaseProyeccion.month - 1]} ${mesBaseProyeccion.year}',
+                  detalle: '• Capital proyectado en los 3 meses posteriores: MXN ${sumaProy3M.toStringAsFixed(2)} ($pzasProy3M pzas).\n' +
                       proyeccion3Meses.map((p) => '  ↳ ${p['etiqueta']} (${p['horizonte']}): MXN ${(p['monto'] as double).toStringAsFixed(2)} (${p['pzas']} pzas en ${p['lotes']} lotes)').join('\n'),
                 ),
                 const SizedBox(height: 10),
                 _tarjetaInsightIA(
                   icono: Icons.stacked_line_chart,
                   color: Colors.greenAccent,
-                  titulo: '3. Desempeño Acumulado Anual y Meta de Rescate ($y0 vs $y1 / $y2)',
-                  detalle: '• Inventario Acumulado $y0: MXN ${invY0.toStringAsFixed(2)} (En riesgo ≤30d: MXN ${rsgY0.toStringAsFixed(2)}) | Variación YoY vs $y1: ${_formatearVariacion(invY0, invY1)} (En $y2: MXN ${invY2.toStringAsFixed(2)}).\n'
-                      '• Bajas gestionadas $y0: MXN ${tratY0['total']!.toStringAsFixed(2)} (Devolución: MXN ${tratY0['dev']!.toStringAsFixed(2)} • Promoción: MXN ${tratY0['promo']!.toStringAsFixed(2)} • Merma: MXN ${tratY0['merma']!.toStringAsFixed(2)}).\n'
+                  titulo: '3. Desempeño Acumulado Anual ($y0 vs $y1 / $y2)',
+                  detalle: '• Inventario Acumulado en todo el año $y0: MXN ${invY0.toStringAsFixed(2)} (En riesgo / Bodega: MXN ${rsgY0.toStringAsFixed(2)}) | Variación YoY vs $y1: ${_formatearVariacion(invY0, invY1)} (En $y2: MXN ${invY2.toStringAsFixed(2)}).\n'
+                      '• Bajas gestionadas en $y0: MXN ${tratY0['total']!.toStringAsFixed(2)} (Devolución: MXN ${tratY0['dev']!.toStringAsFixed(2)} • Promoción: MXN ${tratY0['promo']!.toStringAsFixed(2)} • Merma: MXN ${tratY0['merma']!.toStringAsFixed(2)}).\n'
                       '• Tasa de Rescate $y0: ${rescateY0.toStringAsFixed(1)}% vs Meta 75% (${diffMetaRescate >= 0 ? "+" : ""}${diffMetaRescate.toStringAsFixed(1)} pts) | Índice Merma: ${mermaPctY0.toStringAsFixed(1)}%.',
                 ),
                 const SizedBox(height: 10),
                 _tarjetaInsightIA(
                   icono: Icons.pie_chart,
                   color: Colors.pinkAccent,
-                  titulo: '4. Desviación en los 3 Rubros ($nombrePeriodoActivo • Media Riesgo: ${pctRiesgoGlobalAct.toStringAsFixed(1)}%)',
+                  titulo: '4. Desviación en los 3 Rubros ($nombrePeriodoActivo • Media Riesgo/Bodega: ${pctRiesgoGlobalAct.toStringAsFixed(1)}%)',
                   detalle: '• 🏢 Proveedor crítico #1: $topProvTxt\n'
                       '• 📦 Grupo de Art. crítico #1: $topGrupoTxt\n'
                       '• 🏷️ Marca crítica #1: $topMarcaTxt',
@@ -729,18 +789,18 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                 _tarjetaInsightIA(
                   icono: Icons.storefront,
                   color: Colors.purpleAccent,
-                  titulo: '5. Distribución por Área y Top SKUs Críticos (Pareto 80/20)',
-                  detalle: '• Capital en Piso: MXN ${capPiso.toStringAsFixed(2)} • En Bodega: MXN ${capBodega.toStringAsFixed(2)} (${pctBodega.toStringAsFixed(1)}%) • En Display: MXN ${capDisplay.toStringAsFixed(2)}.\n'
-                      '• Top SKUs con mayor impacto financiero en riesgo:\n$textoTopSkus',
+                  titulo: '5. Capital por Área (Piso vs Bodega) y Top SKUs de $nombrePeriodoActivo',
+                  detalle: '• Distribución física de $nombrePeriodoActivo: En Piso (Exhibido): MXN ${capPiso.toStringAsFixed(2)} • En Bodega (Guardado): MXN ${capBodega.toStringAsFixed(2)} (${pctBodega.toStringAsFixed(1)}%) • En Display: MXN ${capDisplay.toStringAsFixed(2)}.\n'
+                      '• Top SKUs de mayor valor que caducan en $nombrePeriodoActivo:\n$textoTopSkus',
                 ),
                 const SizedBox(height: 10),
                 _tarjetaInsightIA(
                   icono: Icons.lightbulb,
                   color: Colors.amberAccent,
-                  titulo: '6. Recomendaciones Estratégicas IA',
-                  detalle: '1. Priorizar acuerdo de devolución o cambio físico con el proveedor #1 en desviación antes de cruzar el umbral de 15 días.\n'
-                      '2. Adelantar etiquetado de promoción en las marcas con desviación positiva (> +10% sobre la media de la tienda).\n'
-                      '3. Ejecutar trasvase de bodega a piso para los ${proyeccion3Meses.first['lotes']} lotes que entran en ventana de 30 días el próximo mes (${proyeccion3Meses.first['etiqueta']}).',
+                  titulo: '6. Recomendaciones Estratégicas IA para $nombrePeriodoActivo',
+                  detalle: '1. Extraer de Bodega a Piso los MXN ${capBodega.toStringAsFixed(2)} (${pctBodega.toStringAsFixed(1)}% del mes) que siguen guardados sin exhibición.\n'
+                      '2. Priorizar negociación comercial con ${listaProvs.isNotEmpty ? listaProvs.first['nombre'] : "el proveedor principal"} y etiquetado oportuno en la marca ${listaMarcas.isNotEmpty ? listaMarcas.first['nombre'] : "líder"}.\n'
+                      '3. Preparar capacidad de exhibición para el mes siguiente (${proyeccion3Meses.first['etiqueta']}: MXN ${(proyeccion3Meses.first['monto'] as double).toStringAsFixed(2)} en ${proyeccion3Meses.first['lotes']} lotes).',
                 ),
               ],
             ),
@@ -758,9 +818,10 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                 label: const Text('PDF', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                 onPressed: () => _exportarDiagnosticoProfundoPDF(
                   nombrePeriodoActivo: nombrePeriodoActivo,
-                  invMesAct: invMesAct,
-                  rsgMesAct: rsgMesAct,
-                  pctRsgMesAct: pctRsgMesAct,
+                  anioAnalizado: y0,
+                  invMesAct: totalAct,
+                  rsgMesAct: riesgoAct,
+                  pctRsgMesAct: pctRiesgoGlobalAct,
                   varMoM: _formatearVariacion(invMesAct, invMesAnt),
                   proyeccion3Meses: proyeccion3Meses,
                   sumaProy3M: sumaProy3M,
@@ -785,9 +846,10 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                 label: const Text('EXCEL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                 onPressed: () => _exportarDiagnosticoProfundoExcel(
                   nombrePeriodoActivo: nombrePeriodoActivo,
-                  invMesAct: invMesAct,
-                  rsgMesAct: rsgMesAct,
-                  pctRsgMesAct: pctRsgMesAct,
+                  anioAnalizado: y0,
+                  invMesAct: totalAct,
+                  rsgMesAct: riesgoAct,
+                  pctRsgMesAct: pctRiesgoGlobalAct,
                   varMoM: _formatearVariacion(invMesAct, invMesAnt),
                   proyeccion3Meses: proyeccion3Meses,
                   invY0: invY0,
@@ -818,6 +880,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
 
   void _exportarDiagnosticoProfundoExcel({
     required String nombrePeriodoActivo,
+    required int anioAnalizado,
     required double invMesAct,
     required double rsgMesAct,
     required double pctRsgMesAct,
@@ -842,27 +905,27 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     csv.writeln("Tienda,${widget.idTiendaGlobal},Periodo Analizado,$nombrePeriodoActivo,Fecha Generacion,${DateTime.now().toIso8601String().substring(0, 10)}");
     csv.writeln("");
 
-    csv.writeln("1. RESUMEN MENSUAL, ACUMULADO ANUAL Y DISTRIBUCION POR AREA");
-    csv.writeln("INDICADOR,INVENTARIO TOTAL (MXN),MONTO EN RIESGO <=30D (MXN),% EN RIESGO,VARIACION PERIODO ANTERIOR");
-    csv.writeln("Vista Mensual Actual,${invMesAct.toStringAsFixed(2)},${rsgMesAct.toStringAsFixed(2)},${pctRsgMesAct.toStringAsFixed(2)}%,$varMoM");
-    csv.writeln("Acumulado Anual (${DateTime.now().year}),${invY0.toStringAsFixed(2)},${rsgY0.toStringAsFixed(2)},${(invY0 > 0 ? (rsgY0 / invY0) * 100 : 0).toStringAsFixed(2)}%,$varYoY");
-    csv.writeln("Capital por Area,PISO: ${capPiso.toStringAsFixed(2)},BODEGA: ${capBodega.toStringAsFixed(2)},DISPLAY: ${capDisplay.toStringAsFixed(2)},TOTAL: ${(capPiso + capBodega + capDisplay).toStringAsFixed(2)}");
+    csv.writeln("1. RESUMEN DEL PERIODO ($nombrePeriodoActivo), ACUMULADO ANUAL ($anioAnalizado) Y CAPITAL POR AREA");
+    csv.writeln("INDICADOR,INVENTARIO TOTAL (MXN),MONTO EN RIESGO / BODEGA (MXN),% RIESGO,VARIACION PERIODO ANTERIOR");
+    csv.writeln("Periodo Seleccionado ($nombrePeriodoActivo),${invMesAct.toStringAsFixed(2)},${rsgMesAct.toStringAsFixed(2)},${pctRsgMesAct.toStringAsFixed(2)}%,$varMoM");
+    csv.writeln("Acumulado Anual ($anioAnalizado),${invY0.toStringAsFixed(2)},${rsgY0.toStringAsFixed(2)},${(invY0 > 0 ? (rsgY0 / invY0) * 100 : 0).toStringAsFixed(2)}%,$varYoY");
+    csv.writeln("Capital por Area ($nombrePeriodoActivo),PISO (Exhibido): ${capPiso.toStringAsFixed(2)},BODEGA (Guardado): ${capBodega.toStringAsFixed(2)},DISPLAY: ${capDisplay.toStringAsFixed(2)},TOTAL: ${(capPiso + capBodega + capDisplay).toStringAsFixed(2)}");
     csv.writeln("");
 
-    csv.writeln("2. PROYECCION A 3 MESES FUTUROS (30 / 60 / 90 DIAS)");
+    csv.writeln("2. PROYECCION DE LOS 3 MESES SIGUIENTES A $nombrePeriodoActivo");
     csv.writeln("MES PROYECTADO,HORIZONTE,CAPITAL POR VENCER (MXN),PIEZAS,LOTES");
     for (var p in proyeccion3Meses) {
       csv.writeln("${p['etiqueta']},${p['horizonte']},${(p['monto'] as double).toStringAsFixed(2)},${p['pzas']},${p['lotes']}");
     }
     csv.writeln("");
 
-    csv.writeln("3. GESTION DE TRATAMIENTOS Y TASA DE RESCATE ANUAL");
+    csv.writeln("3. GESTION DE TRATAMIENTOS Y TASA DE RESCATE ANUAL ($anioAnalizado)");
     csv.writeln("DEVOLUCION PROVEEDOR (MXN),RESCATADO PROMOCION (MXN),MERMA DESTRUCCION (MXN),TOTAL GESTIONADO (MXN),TASA DE RESCATE (%)");
     csv.writeln("${tratY0['dev']!.toStringAsFixed(2)},${tratY0['promo']!.toStringAsFixed(2)},${tratY0['merma']!.toStringAsFixed(2)},${tratY0['total']!.toStringAsFixed(2)},${rescateY0.toStringAsFixed(2)}%");
     csv.writeln("");
 
-    csv.writeln("4. TOP 10 SKUS CRITICOS INDIVIDUALES (PARETO 80/20)");
-    csv.writeln("SKU,MARCA,DESCRIPCION,UBICACION,DIAS RESTANTES,PIEZAS,MONTO EN RIESGO (MXN)");
+    csv.writeln("4. TOP 10 SKUS DE MAYOR IMPACTO EN $nombrePeriodoActivo (PARETO 80/20)");
+    csv.writeln("SKU,MARCA,DESCRIPCION,UBICACION,DIAS RESTANTES,PIEZAS,VALOR EN INVENTARIO (MXN)");
     for (var s in top10Skus) {
       String dLimpia = '"${s['descripcion'].toString().replaceAll('"', '""')}"';
       String uLimpia = '"${s['ubicacion'].toString().replaceAll('"', '""')}"';
@@ -872,7 +935,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
 
     void escribirTablaRubro(String titulo, List<Map<String, dynamic>> items) {
       csv.writeln(titulo);
-      csv.writeln("NOMBRE,INVENTARIO TOTAL (MXN),MONTO EN RIESGO (MXN),PIEZAS TOTALES,PIEZAS EN RIESGO,% RIESGO RUBRO,% PARTICIPACION INVENTARIO,DESVIACION VS MEDIA (${pctRiesgoGlobalAct.toStringAsFixed(1)}%)");
+      csv.writeln("NOMBRE,INVENTARIO TOTAL (MXN),MONTO EN RIESGO / BODEGA (MXN),PIEZAS TOTALES,PIEZAS EN RIESGO,% RIESGO RUBRO,% PARTICIPACION INVENTARIO,DESVIACION VS MEDIA (${pctRiesgoGlobalAct.toStringAsFixed(1)}%)");
       for (var it in items) {
         String nom = '"${it['nombre'].toString().replaceAll('"', '""')}"';
         double tot = it['total'] as double;
@@ -893,13 +956,14 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.AnchorElement(href: url)
-      ..setAttribute("download", "Diagnostico_Profundo_IA_${widget.idTiendaGlobal}.csv")
+      ..setAttribute("download", "Diagnostico_Profundo_IA_${widget.idTiendaGlobal}_${nombrePeriodoActivo.replaceAll(' ', '_')}.csv")
       ..click();
     html.Url.revokeObjectUrl(url);
   }
 
   void _exportarDiagnosticoProfundoPDF({
     required String nombrePeriodoActivo,
+    required int anioAnalizado,
     required double invMesAct,
     required double rsgMesAct,
     required double pctRsgMesAct,
@@ -951,7 +1015,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
 
     StringBuffer sbTopSkus = StringBuffer();
     if (top10Skus.isEmpty) {
-      sbTopSkus.write('<tr><td colspan="6">Sin SKUs en riesgo crítico</td></tr>');
+      sbTopSkus.write('<tr><td colspan="6">Sin SKUs registrados en $nombrePeriodoActivo</td></tr>');
     } else {
       for (var s in top10Skus) {
         sbTopSkus.write('<tr>');
@@ -967,7 +1031,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
 
     StringBuffer htmlDoc = StringBuffer();
     htmlDoc.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">');
-    htmlDoc.write('<title>Diagnóstico Profundo IA - ${widget.idTiendaGlobal}</title>');
+    htmlDoc.write('<title>Diagnóstico Profundo IA - ${widget.idTiendaGlobal} - $nombrePeriodoActivo</title>');
     htmlDoc.write('<style>');
     htmlDoc.write('body { font-family: Arial, sans-serif; margin: 24px; color: #1e1e1e; background: #fff; }');
     htmlDoc.write('.header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #ffc107; padding-bottom: 10px; margin-bottom: 16px; }');
@@ -992,26 +1056,26 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
     htmlDoc.write('</div><div style="font-size:11px;text-align:right;">Fecha: ${DateTime.now().toIso8601String().substring(0, 10)}</div></div>');
 
     htmlDoc.write('<div class="kpi-grid">');
-    htmlDoc.write('<div class="kpi"><div class="kpi-title">VISTA MENSUAL ACTUAL</div><div class="kpi-val">MXN ${invMesAct.toStringAsFixed(2)}</div><div class="kpi-sub">Riesgo: MXN ${rsgMesAct.toStringAsFixed(2)} (${pctRsgMesAct.toStringAsFixed(1)}%) • MoM: $varMoM</div></div>');
-    htmlDoc.write('<div class="kpi"><div class="kpi-title">PROYECCIÓN 3 MESES FUTUROS</div><div class="kpi-val">MXN ${sumaProy3M.toStringAsFixed(2)}</div><div class="kpi-sub">Horizonte 30, 60 y 90 días</div></div>');
-    htmlDoc.write('<div class="kpi"><div class="kpi-title">ACUMULADO ANUAL (${DateTime.now().year})</div><div class="kpi-val">MXN ${invY0.toStringAsFixed(2)}</div><div class="kpi-sub">Rescate: ${rescateY0.toStringAsFixed(1)}% (Meta 75%) • YoY: $varYoY</div></div>');
-    htmlDoc.write('<div class="kpi"><div class="kpi-title">CAPITAL POR ÁREA</div><div class="kpi-val">Piso: MXN ${capPiso.toStringAsFixed(0)}</div><div class="kpi-sub">Bodega: MXN ${capBodega.toStringAsFixed(0)} • Display: MXN ${capDisplay.toStringAsFixed(0)}</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">PERIODO ($nombrePeriodoActivo)</div><div class="kpi-val">MXN ${invMesAct.toStringAsFixed(2)}</div><div class="kpi-sub">Riesgo/Bodega: MXN ${rsgMesAct.toStringAsFixed(2)} (${pctRsgMesAct.toStringAsFixed(1)}%) • MoM: $varMoM</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">PROYECCIÓN 3 MESES SIGUIENTES</div><div class="kpi-val">MXN ${sumaProy3M.toStringAsFixed(2)}</div><div class="kpi-sub">Siguientes +30, +60 y +90 días</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">ACUMULADO ANUAL ($anioAnalizado)</div><div class="kpi-val">MXN ${invY0.toStringAsFixed(2)}</div><div class="kpi-sub">Rescate: ${rescateY0.toStringAsFixed(1)}% (Meta 75%) • YoY: $varYoY</div></div>');
+    htmlDoc.write('<div class="kpi"><div class="kpi-title">CAPITAL POR ÁREA ($nombrePeriodoActivo)</div><div class="kpi-val">Piso: MXN ${capPiso.toStringAsFixed(0)}</div><div class="kpi-sub">Bodega: MXN ${capBodega.toStringAsFixed(0)} • Display: MXN ${capDisplay.toStringAsFixed(0)}</div></div>');
     htmlDoc.write('</div>');
 
-    htmlDoc.write('<h2>1. Proyección de Vencimientos a 3 Meses Futuros (30 / 60 / 90 Días)</h2>');
+    htmlDoc.write('<h2>1. Proyección de los 3 Meses Siguientes a $nombrePeriodoActivo (+30 / +60 / +90 Días)</h2>');
     htmlDoc.write('<table><thead><tr><th>Mes Proyectado</th><th>Horizonte</th><th>Capital por Vencer</th><th>Piezas</th><th>Lotes</th></tr></thead><tbody>${sbProy.toString()}</tbody></table>');
 
-    htmlDoc.write('<h2>2. Top 10 SKUs Críticos Individuales (Pareto 80/20)</h2>');
-    htmlDoc.write('<table><thead><tr><th>SKU</th><th>Marca</th><th>Descripción</th><th>Ubicación</th><th>Días / Pzas</th><th>Monto en Riesgo</th></tr></thead><tbody>${sbTopSkus.toString()}</tbody></table>');
+    htmlDoc.write('<h2>2. Top 10 SKUs de Mayor Valor en $nombrePeriodoActivo (Pareto 80/20)</h2>');
+    htmlDoc.write('<table><thead><tr><th>SKU</th><th>Marca</th><th>Descripción</th><th>Ubicación</th><th>Días / Pzas</th><th>Valor Lote</th></tr></thead><tbody>${sbTopSkus.toString()}</tbody></table>');
 
     htmlDoc.write('<h2>3. Matriz de Proveedores en Riesgo y Desviación ($nombrePeriodoActivo)</h2>');
-    htmlDoc.write('<table><thead><tr><th>Proveedor</th><th>Inventario Total</th><th>Monto en Riesgo</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaProvs)}</tbody></table>');
+    htmlDoc.write('<table><thead><tr><th>Proveedor</th><th>Inventario Total</th><th>Riesgo / Bodega</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaProvs)}</tbody></table>');
 
     htmlDoc.write('<h2>4. Matriz de Grupos de Artículos en Riesgo y Desviación ($nombrePeriodoActivo)</h2>');
-    htmlDoc.write('<table><thead><tr><th>Grupo de Artículos</th><th>Inventario Total</th><th>Monto en Riesgo</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaGrupos)}</tbody></table>');
+    htmlDoc.write('<table><thead><tr><th>Grupo de Artículos</th><th>Inventario Total</th><th>Riesgo / Bodega</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaGrupos)}</tbody></table>');
 
     htmlDoc.write('<h2>5. Matriz de Marcas en Riesgo y Desviación ($nombrePeriodoActivo)</h2>');
-    htmlDoc.write('<table><thead><tr><th>Marca</th><th>Inventario Total</th><th>Monto en Riesgo</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaMarcas)}</tbody></table>');
+    htmlDoc.write('<table><thead><tr><th>Marca</th><th>Inventario Total</th><th>Riesgo / Bodega</th><th>Piezas</th><th>% Riesgo (% Inv)</th><th>Desviación vs Media</th></tr></thead><tbody>${filasRubroHtml(listaMarcas)}</tbody></table>');
 
     htmlDoc.write('<script>setTimeout(function(){ window.print(); }, 500);</script></body></html>');
 
@@ -1094,7 +1158,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
           children: [
             Text(titulo, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 10.5)),
             const SizedBox(height: 3),
-            Text('$conRiesgo de ${items.length} en riesgo', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+            Text('$conRiesgo de ${items.length} en riesgo/bod.', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10.5)),
             const SizedBox(height: 2),
             Text(
               'Top: $topNombre',
@@ -1194,7 +1258,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'En riesgo ≤30d: MXN ${rsg.toStringAsFixed(2)} (${pctRiesgo.toStringAsFixed(1)}%)',
+                          'En riesgo / Bodega: MXN ${rsg.toStringAsFixed(2)} (${pctRiesgo.toStringAsFixed(1)}%)',
                           style: TextStyle(
                             color: rsg > 0 ? Colors.redAccent : Colors.greenAccent,
                             fontSize: 10.5,
@@ -1231,7 +1295,6 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
   @override
   Widget build(BuildContext context) {
     int anioHoy = DateTime.now().year;
-    // Únicamente los 3 años dinámicos: ej. 2026, 2025, 2024 (sin botón de 3 AÑOS)
     List<int> ultimos3Anios = [anioHoy, anioHoy - 1, anioHoy - 2];
     if (!ultimos3Anios.contains(_anioAcumulado)) {
       _anioAcumulado = anioHoy;
@@ -1269,8 +1332,11 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
         double valorProximo = double.tryParse((datosP['proximo'] ?? 0).toString()) ?? 0.0;
         double valorCritico = double.tryParse((datosP['critico'] ?? 0).toString()) ?? 0.0;
         double valorCaducado = double.tryParse((datosP['caducado'] ?? 0).toString()) ?? 0.0;
-        double montoEnRiesgo30d = valorCaducado + valorCritico + valorProximo;
-        double pctGlobalEnRiesgo = totalRiesgo > 0 ? (montoEnRiesgo30d / totalRiesgo) * 100.0 : 0.0;
+        double montoEnRiesgoOBodega = double.tryParse((datosP['riesgo'] ?? 0).toString()) ?? 0.0;
+        double pctGlobalEnRiesgo = totalRiesgo > 0 ? (montoEnRiesgoOBodega / totalRiesgo) * 100.0 : 0.0;
+
+        double capPisoPeriodo = double.tryParse((datosP['capPiso'] ?? 0).toString()) ?? 0.0;
+        double capBodegaPeriodo = double.tryParse((datosP['capBodega'] ?? 0).toString()) ?? 0.0;
 
         var tratPeriodo = _obtenerTratamientosDePeriodo(
           tratamientosPorAnio,
@@ -1524,6 +1590,11 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                                               'MXN ${totalRiesgo.toStringAsFixed(2)}',
                                               style: const TextStyle(color: Colors.amberAccent, fontSize: 20, fontWeight: FontWeight.bold),
                                             ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '🏪 Piso: MXN ${capPisoPeriodo.toStringAsFixed(0)}  •  📦 Bodega: MXN ${capBodegaPeriodo.toStringAsFixed(0)}',
+                                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                                            ),
                                             const SizedBox(height: 6),
                                             Container(
                                               padding: const EdgeInsets.all(8),
@@ -1536,7 +1607,7 @@ class _PantallaGraficasState extends State<PantallaGraficas> {
                                                 crossAxisAlignment: CrossAxisAlignment.start,
                                                 children: [
                                                   Text(
-                                                    'En Riesgo (≤30d): MXN ${montoEnRiesgo30d.toStringAsFixed(2)}',
+                                                    'Riesgo / Bodega: MXN ${montoEnRiesgoOBodega.toStringAsFixed(2)}',
                                                     style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                                                   ),
                                                   const SizedBox(height: 2),
