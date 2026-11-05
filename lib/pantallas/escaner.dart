@@ -1165,6 +1165,107 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
     _buscarDatosOriginales();
   }
 
+  bool _esperandoConfirmacionSinMatch = false;
+
+  Future<void> _mostrarAlertaSinMatchAlta(String codigoCapturado) async {
+    setState(() => _esperandoConfirmacionSinMatch = true);
+    FocusScope.of(context).unfocus();
+
+    bool? continuar = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1E1A24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Colors.purpleAccent, width: 2.5),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.add_a_photo_rounded, color: Colors.amber, size: 28),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '⚠️ CÓDIGO SIN MATCH EN CATÁLOGO',
+                  style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.purpleAccent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.purpleAccent),
+                ),
+                child: Text(
+                  'Código escaneado: $codigoCapturado',
+                  style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '📸 Por favor toma una fotografía del SKU, UPC y/o producto para su posterior validación.',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5, height: 1.35),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '🔒 Hasta que no presiones ACEPTAR no podrás continuar con el alta ni seguir escaneando.',
+                style: TextStyle(color: Colors.orangeAccent, fontSize: 11.5, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'CANCELAR ESCANEO',
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11),
+              ),
+            ),
+            InkWell(
+              onTap: () => Navigator.pop(ctx, true),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.amber,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.black, size: 18),
+                    SizedBox(width: 6),
+                    Text(
+                      'ACEPTAR (CONTINUAR)',
+                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    if (continuar != true) {
+      Navigator.pop(context);
+    } else {
+      setState(() => _esperandoConfirmacionSinMatch = false);
+    }
+  }
+
   Future<void> _buscarDatosOriginales() async {
     try {
       String codigo = widget.skuEscaneado.trim();
@@ -1180,6 +1281,9 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             _descripcion = "Artículo Nuevo";
           }
         });
+        if (_datosMaestros == null) {
+          await _mostrarAlertaSinMatchAlta(codigo);
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _descripcion = "Error");
@@ -1479,7 +1583,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
               width: double.infinity,
               height: 60,
               child: ElevatedButton(
-                onPressed: (_fechaSeleccionada == null || _guardando) ? null : _guardarEnNube,
+                onPressed: (_fechaSeleccionada == null || _guardando || _esperandoConfirmacionSinMatch) ? null : _guardarEnNube,
                 child: _guardando ? const CircularProgressIndicator() : const Text('CONFIRMAR Y GUARDAR'),
               ),
             ),

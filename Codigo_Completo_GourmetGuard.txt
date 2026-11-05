@@ -1,6 +1,6 @@
 ====================================================================
 RESPALDO DE CÓDIGO FUENTE - GOURMET GUARD
-Generado: 04/11/2026 16:31:52
+Generado: 05/11/2026 00:15:25
 ====================================================================
 
 ====================================================================
@@ -5204,6 +5204,107 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
     _buscarDatosOriginales();
   }
 
+  bool _esperandoConfirmacionSinMatch = false;
+
+  Future<void> _mostrarAlertaSinMatchAlta(String codigoCapturado) async {
+    setState(() => _esperandoConfirmacionSinMatch = true);
+    FocusScope.of(context).unfocus();
+
+    bool? continuar = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1E1A24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Colors.purpleAccent, width: 2.5),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.add_a_photo_rounded, color: Colors.amber, size: 28),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '⚠️ CÓDIGO SIN MATCH EN CATÁLOGO',
+                  style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.purpleAccent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.purpleAccent),
+                ),
+                child: Text(
+                  'Código escaneado: $codigoCapturado',
+                  style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '📸 Por favor toma una fotografía del SKU, UPC y/o producto para su posterior validación.',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5, height: 1.35),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '🔒 Hasta que no presiones ACEPTAR no podrás continuar con el alta ni seguir escaneando.',
+                style: TextStyle(color: Colors.orangeAccent, fontSize: 11.5, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'CANCELAR ESCANEO',
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11),
+              ),
+            ),
+            InkWell(
+              onTap: () => Navigator.pop(ctx, true),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.amber,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.black, size: 18),
+                    SizedBox(width: 6),
+                    Text(
+                      'ACEPTAR (CONTINUAR)',
+                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    if (continuar != true) {
+      Navigator.pop(context);
+    } else {
+      setState(() => _esperandoConfirmacionSinMatch = false);
+    }
+  }
+
   Future<void> _buscarDatosOriginales() async {
     try {
       String codigo = widget.skuEscaneado.trim();
@@ -5219,6 +5320,9 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
             _descripcion = "Artículo Nuevo";
           }
         });
+        if (_datosMaestros == null) {
+          await _mostrarAlertaSinMatchAlta(codigo);
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _descripcion = "Error");
@@ -5518,7 +5622,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
               width: double.infinity,
               height: 60,
               child: ElevatedButton(
-                onPressed: (_fechaSeleccionada == null || _guardando) ? null : _guardarEnNube,
+                onPressed: (_fechaSeleccionada == null || _guardando || _esperandoConfirmacionSinMatch) ? null : _guardarEnNube,
                 child: _guardando ? const CircularProgressIndicator() : const Text('CONFIRMAR Y GUARDAR'),
               ),
             ),
@@ -7898,11 +8002,21 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
   final TextEditingController _cantCtrl = TextEditingController(text: '1');
   final FocusNode _skuFocus = FocusNode();
 
-  List<Map<String, dynamic>> _manifiesto = [];
+  final List<Map<String, dynamic>> _manifiesto = [];
   bool _guardando = false;
+  bool _alertaSinMatchActiva = false;
+
+  @override
+  void dispose() {
+    _fechaCtrl.dispose();
+    _skuCtrl.dispose();
+    _cantCtrl.dispose();
+    _skuFocus.dispose();
+    super.dispose();
+  }
 
   DateTime? _parsearFecha(String input) {
-    String clean = input.replaceAll(RegExp(r'[^0-9]'), ''); 
+    String clean = input.replaceAll(RegExp(r'[^0-9]'), '');
     try {
       if (clean.length == 6) {
         int d = int.parse(clean.substring(0, 2));
@@ -7915,22 +8029,124 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
         int y = int.parse(clean.substring(4, 8));
         return DateTime(y, m, d);
       }
-    } catch (e) {}
+    } catch (_) {}
     return null;
   }
 
+  Future<bool> _mostrarAdvertenciaSinMatch(String codigoCapturado) async {
+    setState(() => _alertaSinMatchActiva = true);
+    _skuFocus.unfocus();
+    FocusScope.of(context).unfocus();
+
+    bool? resultado = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1E1A24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Colors.purpleAccent, width: 2.5),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.add_a_photo_rounded, color: Colors.amber, size: 28),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '⚠️ CÓDIGO SIN MATCH EN CATÁLOGO',
+                  style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.purpleAccent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.purpleAccent),
+                ),
+                child: Text(
+                  'Código escaneado: $codigoCapturado',
+                  style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '📸 Por favor toma una fotografía del SKU, UPC y/o producto para su posterior validación.',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5, height: 1.35),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '🔒 El escáner se encuentra pausado. Hasta que no presiones ACEPTAR no podrás continuar escaneando.',
+                style: TextStyle(color: Colors.orangeAccent, fontSize: 11.5, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'DESCARTAR LECTURA',
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11),
+              ),
+            ),
+            // Usamos InkWell sin foco de teclado para que el Enter del láser Zebra no cierre la alerta por accidente
+            InkWell(
+              onTap: () => Navigator.pop(ctx, true),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.amber,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.black, size: 18),
+                    SizedBox(width: 6),
+                    Text(
+                      'ACEPTAR (CONTINUAR)',
+                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (mounted) {
+      setState(() => _alertaSinMatchActiva = false);
+    }
+    return resultado == true;
+  }
+
   void _agregarItem(String codigoIngresado) async {
+    if (_alertaSinMatchActiva) return;
     String codigo = codigoIngresado.trim();
     if (codigo.isEmpty) return;
     DateTime? cad = _parsearFecha(_fechaCtrl.text);
-    
+
     if (cad == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Formato de fecha inválido. Usa DD/MM/AA'), backgroundColor: Colors.redAccent));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Formato de fecha inválido. Usa DD/MM/AA'), backgroundColor: Colors.redAccent),
+      );
       _skuCtrl.clear();
       _skuFocus.requestFocus();
       return;
     }
-    
+
     int cant = int.tryParse(_cantCtrl.text) ?? 1;
 
     String skuOficial = codigo;
@@ -7943,7 +8159,6 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     masterData = await JerarquiaUbicacionHelper.buscarProductoMaestro(codigo);
 
     if (masterData != null) {
-      // Conversión automática de UPC a SKU Oficial
       if (masterData['sku'] != null && masterData['sku'].toString().trim().isNotEmpty) {
         skuOficial = masterData['sku'].toString().trim();
       }
@@ -7952,19 +8167,24 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
       prov = masterData['nombreProveedor'] ?? 'ND';
       gpo = masterData['nombreGpoArticulos'] ?? 'SIN GRUPO';
     } else {
+      bool confirmarAltaSinMatch = await _mostrarAdvertenciaSinMatch(codigo);
+      if (!confirmarAltaSinMatch) {
+        _skuCtrl.clear();
+        _skuFocus.requestFocus();
+        return;
+      }
       desc = 'ARTÍCULO NUEVO / NO EN CATÁLOGO';
     }
 
     String fechaEstandar = "${cad.day.toString().padLeft(2, '0')}/${cad.month.toString().padLeft(2, '0')}/${cad.year}";
 
     setState(() {
-      // Unificar lote si tiene el mismo SKU Oficial y la misma Fecha de Caducidad
       int idx = _manifiesto.indexWhere((e) {
         DateTime fExistente = e['fechaCaducidad'] as DateTime;
         return e['sku'] == skuOficial &&
-               fExistente.year == cad.year &&
-               fExistente.month == cad.month &&
-               fExistente.day == cad.day;
+            fExistente.year == cad.year &&
+            fExistente.month == cad.month &&
+            fExistente.day == cad.day;
       });
 
       if (idx != -1) {
@@ -7979,7 +8199,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
           'fechaRaw': fechaEstandar,
           'nombreProveedor': prov,
           'nombreGpoArticulos': gpo,
-          'datosMaestros': masterData
+          'datosMaestros': masterData,
         });
       }
     });
@@ -7992,16 +8212,16 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
   Future<void> _guardarManifiesto() async {
     if (_manifiesto.isEmpty) return;
     setState(() => _guardando = true);
-    
+
     var refTienda = FirebaseFirestore.instance.collection('tiendas').doc(widget.idTiendaGlobal);
     var batch = FirebaseFirestore.instance.batch();
-    
+
     for (var item in _manifiesto) {
       DateTime cad = item['fechaCaducidad'] as DateTime;
       Timestamp tsCad = Timestamp.fromDate(cad);
 
-      // Verificar si ya existe el mismo lote (SKU + Fecha) en OPERACION TIENDA para unificarlo
-      var existenteSnap = await refTienda.collection('inventario_activo')
+      var existenteSnap = await refTienda
+          .collection('inventario_activo')
           .where('sku', isEqualTo: item['sku'])
           .where('ubicacion', isEqualTo: 'OPERACION TIENDA')
           .get();
@@ -8033,7 +8253,7 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
           'nombreProveedor': item['nombreProveedor'],
           'nombreGpoArticulos': item['nombreGpoArticulos'],
           'fechaCaptura': FieldValue.serverTimestamp(),
-          'capturista': widget.usuario
+          'capturista': widget.usuario,
         };
         if (item['datosMaestros'] != null) {
           data.addAll({
@@ -8053,10 +8273,12 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
     }
 
     await batch.commit();
-    
+
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Manifiesto recibido y unificado en OPERACION TIENDA'), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Manifiesto recibido y unificado en OPERACION TIENDA'), backgroundColor: Colors.green),
+      );
     }
   }
 
@@ -8077,7 +8299,13 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                     flex: 2,
                     child: TextField(
                       controller: _fechaCtrl,
-                      decoration: const InputDecoration(labelText: 'Fecha de Caducidad', hintText: 'Ej. 01.09.26 o 01/09/2026', filled: true, fillColor: Colors.black45, border: OutlineInputBorder()),
+                      decoration: const InputDecoration(
+                        labelText: 'Fecha de Caducidad',
+                        hintText: 'Ej. 01.09.26 o 01/09/2026',
+                        filled: true,
+                        fillColor: Colors.black45,
+                        border: OutlineInputBorder(),
+                      ),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     ),
                   ),
@@ -8097,8 +8325,9 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
             TextField(
               controller: _skuCtrl,
               focusNode: _skuFocus,
+              readOnly: _alertaSinMatchActiva,
               decoration: InputDecoration(
-                labelText: 'Escanear SKU / UPC...',
+                labelText: _alertaSinMatchActiva ? '🔒 Confirma la advertencia en pantalla...' : 'Escanear SKU / UPC...',
                 prefixIcon: const Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
                 filled: true,
                 fillColor: Colors.blueAccent.withOpacity(0.1),
@@ -8118,10 +8347,19 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
                     color: Colors.white10,
                     margin: const EdgeInsets.symmetric(vertical: 4),
                     child: ListTile(
-                      leading: CircleAvatar(backgroundColor: Colors.amber, child: Text(item['cantidad'].toString(), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold))),
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.amber,
+                        child: Text(item['cantidad'].toString(), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      ),
                       title: Text(item['descripcion'], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      subtitle: Text('SKU: ${item['sku']} • Vence: ${item['fechaRaw']}\nUPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(item)} • Prov: ${item['nombreProveedor']}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                      trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: () => setState(() => _manifiesto.removeAt(i))),
+                      subtitle: Text(
+                        'SKU: ${item['sku']} • Vence: ${item['fechaRaw']}\nUPC: ${JerarquiaUbicacionHelper.obtenerUpcVisual(item)} • Prov: ${item['nombreProveedor']}',
+                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.redAccent),
+                        onPressed: () => setState(() => _manifiesto.removeAt(i)),
+                      ),
                     ),
                   );
                 },
@@ -8129,14 +8367,18 @@ class _PantallaIngresoState extends State<PantallaIngreso> {
             ),
             if (_manifiesto.isNotEmpty)
               SizedBox(
-                width: double.infinity, height: 60,
+                width: double.infinity,
+                height: 60,
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black),
                   icon: _guardando ? const CircularProgressIndicator() : const Icon(Icons.save_alt, size: 28),
-                  label: Text(_guardando ? 'GUARDANDO...' : 'GUARDAR MANIFIESTO (${_manifiesto.length} lotes)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  label: Text(
+                    _guardando ? 'GUARDANDO...' : 'GUARDAR MANIFIESTO (${_manifiesto.length} lotes)',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
                   onPressed: _guardando ? null : _guardarManifiesto,
                 ),
-              )
+              ),
           ],
         ),
       ),
