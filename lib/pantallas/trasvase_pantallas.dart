@@ -32,11 +32,20 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
   bool _tecladoManualActivo = false;
   DateTime? _ultimoToqueBuscador;
 
-  // Lista de SKUs escaneados en la sesión actual (la lista inicia vacía para ahorrar RAM)
-  final List<String> _skusEscaneados = [];
+  // Memoria persistente por tienda para que NO se borren los SKUs ni cantidades si el usuario sale por error
+  static final Map<String, List<String>> _memoriaSkusPorTienda = {};
+  static final Map<String, Map<String, int>> _memoriaCantidadesPorTienda = {};
+  static final Map<String, String?> _memoriaUbicacionPorTienda = {};
+
+  List<String> get _skusEscaneados =>
+      _memoriaSkusPorTienda.putIfAbsent(widget.idTiendaGlobal, () => []);
+
+  Map<String, int> get _cantidadesElegidas =>
+      _memoriaCantidadesPorTienda.putIfAbsent(widget.idTiendaGlobal, () => {});
+
   String _filtroTextoEnVivo = '';
-  String? _ubicacionOrigenFiltro;
-  final Map<String, int> _cantidadesElegidas = {};
+  String? get _ubicacionOrigenFiltro => _memoriaUbicacionPorTienda[widget.idTiendaGlobal];
+  set _ubicacionOrigenFiltro(String? val) => _memoriaUbicacionPorTienda[widget.idTiendaGlobal] = val;
   bool _procesandoEnvio = false;
 
   late Stream<QuerySnapshot> _invStream;
@@ -52,9 +61,14 @@ class _PantallaTrasvaseMasivoState extends State<PantallaTrasvaseMasivo> {
   void initState() {
     super.initState();
     JerarquiaUbicacionHelper.precargarCacheUpc();
-    _ubicacionOrigenFiltro = widget.ubicacionInicial;
+    if (widget.ubicacionInicial != null) {
+      _ubicacionOrigenFiltro = widget.ubicacionInicial;
+    }
     if (widget.skuFiltroInicial != null && widget.skuFiltroInicial!.trim().isNotEmpty) {
-      _skusEscaneados.add(widget.skuFiltroInicial!.trim().toLowerCase());
+      String inicialLower = widget.skuFiltroInicial!.trim().toLowerCase();
+      if (!_skusEscaneados.contains(inicialLower)) {
+        _skusEscaneados.insert(0, inicialLower);
+      }
     }
     _invStream = _refInv.orderBy('fechaCaducidad').snapshots();
     _ubiStream = _refUbi.orderBy('nombre').snapshots();
