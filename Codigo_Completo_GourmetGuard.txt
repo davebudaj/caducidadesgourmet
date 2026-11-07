@@ -1,6 +1,6 @@
 ====================================================================
 RESPALDO DE CÓDIGO FUENTE - GOURMET GUARD
-Generado: 05/11/2026 00:15:25
+Generado: 07/11/2026 17:52:06
 ====================================================================
 
 ====================================================================
@@ -2911,28 +2911,41 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
         int misionesNuevas = 0;
         int misionesActualizadas = 0;
+        int descargadosAutomaticoUnicoLote = 0;
 
         for (var sku in ventasProcesadas.keys) {
           int porDescontar = ventasProcesadas[sku]!;
-          
+
           var querySnap = await _refTienda.collection('inventario_activo').where('sku', isEqualTo: sku).get();
-          
-          var docsOrdenados = querySnap.docs.toList();
+
+          var docsOrdenados = querySnap.docs.where((d) {
+            var m = d.data() as Map<String, dynamic>;
+            String u = (m['ubicacion'] ?? '').toString().toUpperCase();
+            int c = (m['cantidad'] ?? 0) as int;
+            return u != 'EN TRÁNSITO' && c > 0;
+          }).toList();
+
+          if (docsOrdenados.isEmpty) continue;
+
           docsOrdenados.sort((a, b) {
             var dataA = a.data() as Map<String, dynamic>;
             var dataB = b.data() as Map<String, dynamic>;
-            
+
             String ubiA = (dataA['ubicacion'] ?? '').toString().toUpperCase();
             String ubiB = (dataB['ubicacion'] ?? '').toString().toUpperCase();
-            
+
             int prioA = ubiA.contains('BODEGA') ? 1 : 0;
             int prioB = ubiB.contains('BODEGA') ? 1 : 0;
-            if (prioA != prioB) return prioA.compareTo(prioB); 
-            
+            if (prioA != prioB) return prioA.compareTo(prioB);
+
             Timestamp tA = dataA['fechaCaducidad'] ?? Timestamp.now();
             Timestamp tB = dataB['fechaCaducidad'] ?? Timestamp.now();
             return tA.compareTo(tB);
           });
+
+          // Si solo existe 1 lote activo en total (en piso, o en bodega si no hay en piso),
+          // se descarga en automático sin mandarlo a misiones. Si hay > 1 lote, sí se manda a revisión.
+          bool requiereMisionRevision = docsOrdenados.length > 1;
 
           for (var doc in docsOrdenados) {
             if (porDescontar <= 0) break;
@@ -2941,50 +2954,71 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             int descAqui = (cantActual <= porDescontar) ? cantActual : porDescontar;
             porDescontar -= descAqui;
 
-            if (cantActual <= descAqui) await doc.reference.delete(); 
-            else await doc.reference.update({'cantidad': cantActual - descAqui, 'ventaDiariaPromedio': ventasProcesadas[sku]});
+            if (cantActual <= descAqui) {
+              await doc.reference.delete();
+            } else {
+              await doc.reference.update({
+                'cantidad': cantActual - descAqui,
+                'ventaDiariaPromedio': ventasProcesadas[sku],
+              });
+            }
 
             if (descAqui > 0) {
-              var misionesP = await _refTienda.collection('misiones_auditoria')
-                  .where('estado', isEqualTo: 'pendiente')
-                  .where('sku', isEqualTo: sku)
-                  .get();
-                  
-              var misionMatchea = misionesP.docs.where((m) {
-                  var md = m.data();
-                  return md['ubicacion'] == data['ubicacion'] && md['fechaCaducidad'] == data['fechaCaducidad'] && md['descontado'] != null; 
-              }).toList();
+              if (!requiereMisionRevision) {
+                descargadosAutomaticoUnicoLote++;
+              } else {
+                var misionesP = await _refTienda
+                    .collection('misiones_auditoria')
+                    .where('estado', isEqualTo: 'pendiente')
+                    .where('sku', isEqualTo: sku)
+                    .get();
 
-              if (misionMatchea.isNotEmpty) {
+                var misionMatchea = misionesP.docs.where((m) {
+                  var md = m.data();
+                  return md['ubicacion'] == data['ubicacion'] &&
+                      md['fechaCaducidad'] == data['fechaCaducidad'] &&
+                      md['descontado'] != null;
+                }).toList();
+
+                if (misionMatchea.isNotEmpty) {
                   var docMision = misionMatchea.first;
                   int descAnterior = docMision['descontado'] ?? 0;
                   await docMision.reference.update({
-                      'descontado': descAnterior + descAqui,
-                      'fechaGeneracion': FieldValue.serverTimestamp()
+                    'descontado': descAnterior + descAqui,
+                    'fechaGeneracion': FieldValue.serverTimestamp(),
                   });
                   misionesActualizadas++;
-              } else {
+                } else {
                   List<String> otrasUbis = docsOrdenados
                       .map((d) => ((d.data() as Map<String, dynamic>)['ubicacion'] ?? '').toString())
                       .where((u) => u.isNotEmpty && u != (data['ubicacion'] ?? ''))
                       .toSet()
                       .toList();
                   await _refTienda.collection('misiones_auditoria').add({
-                    'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
-                    'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
-                    'nombreProveedor': data['nombreProveedor'] ?? 'ND', 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                    'sku': sku,
+                    'descripcion': data['descripcion'] ?? 'ND',
+                    'ubicacion': data['ubicacion'] ?? 'ND',
+                    'descontado': descAqui,
+                    'fechaCaducidad': data['fechaCaducidad'],
+                    'estado': 'pendiente',
+                    'nombreProveedor': data['nombreProveedor'] ?? 'ND',
+                    'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
                     'otrasUbicaciones': otrasUbis,
                     if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
                     'fechaGeneracion': FieldValue.serverTimestamp(),
                   });
                   misionesNuevas++;
+                }
               }
             }
           }
         }
         await _refTienda.set({'ultima_carga_ventas': FieldValue.serverTimestamp()}, SetOptions(merge: true));
         await _obtenerUltimaCargaVentas();
-        setState(() { _procesando = false; _estado = "¡Cierre de Ventas Exitoso!\nMisiones Nuevas: $misionesNuevas | Actualizadas: $misionesActualizadas"; });
+        setState(() {
+          _procesando = false;
+          _estado = "¡Cierre de Ventas Exitoso!\n✅ Descarga automática (1 solo lote): $descargadosAutomaticoUnicoLote\n📋 Misiones revisión (>1 lote): $misionesNuevas nuevas | $misionesActualizadas actualizadas";
+        });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
   }
@@ -4037,6 +4071,7 @@ class _PantallaCorporativoState extends State<PantallaCorporativo> {
 ====================================================================
 ARCHIVO: lib/pantallas/escaner.dart
 ====================================================================
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -4074,6 +4109,8 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   late Animation<double> _laserAnimation;
   bool _bloquearEscaneo = false;
   bool _enSubPantalla = false;
+  bool _tecladoNumericoManualActivo = false;
+  DateTime? _ultimoToqueSkuManual;
 
   static const String kUbicacionTransito = 'EN TRÁNSITO';
 
@@ -4092,8 +4129,57 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       if (camPref != null) _camaraActiva = camPref == 'true';
     } catch (_) {}
     _laserController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-    if (_camaraActiva) _laserController.repeat(reverse: true);
+    if (_camaraActiva) {
+      _laserController.repeat(reverse: true);
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _enfocarSkuManualSinTeclado();
+      });
+    }
     _laserAnimation = Tween<double>(begin: 10.0, end: 180.0).animate(_laserController);
+  }
+
+  @override
+  void didUpdateWidget(covariant PantallaEscaner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.estaActiva && !oldWidget.estaActiva && !_camaraActiva && !_enSubPantalla) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _enfocarSkuManualSinTeclado();
+      });
+    }
+  }
+
+  void _enfocarSkuManualSinTeclado() {
+    if (!mounted || _camaraActiva || _enSubPantalla) return;
+    setState(() => _tecladoNumericoManualActivo = false);
+    _skuManualFocus.requestFocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
+  void _activarTecladoNumericoPorDobleToque() {
+    if (!mounted) return;
+    setState(() => _tecladoNumericoManualActivo = true);
+    _skuManualFocus.unfocus();
+    Future.delayed(const Duration(milliseconds: 60), () {
+      if (!mounted) return;
+      _skuManualFocus.requestFocus();
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    });
+  }
+
+  void _manejarToqueRecuadroSkuManual() {
+    DateTime ahora = DateTime.now();
+    if (_ultimoToqueSkuManual != null &&
+        ahora.difference(_ultimoToqueSkuManual!).inMilliseconds < 420) {
+      _ultimoToqueSkuManual = null;
+      _activarTecladoNumericoPorDobleToque();
+    } else {
+      _ultimoToqueSkuManual = ahora;
+      if (!_tecladoNumericoManualActivo) {
+        _skuManualFocus.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    }
   }
 
   @override
@@ -4125,7 +4211,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
         ),
       ),
     );
-    if (mounted) setState(() => _enSubPantalla = false);
+    if (mounted) { setState(() => _enSubPantalla = false); _enfocarSkuManualSinTeclado(); }
   }
 
   Future<void> _irACarritoTemporal({String? destinoPreseleccionado}) async {
@@ -4754,7 +4840,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
     } finally {
       if (mounted) {
         setState(() => _enSubPantalla = false);
-        if (!_camaraActiva) _skuManualFocus.requestFocus();
+        if (!_camaraActiva) _enfocarSkuManualSinTeclado();
       }
     }
   }
@@ -4810,7 +4896,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                   _ubicacionDestino = muebleEscaneado;
                   _skuController.clear();
                 });
-                if (!_camaraActiva) _skuManualFocus.requestFocus();
+                if (!_camaraActiva) _enfocarSkuManualSinTeclado();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
@@ -4862,7 +4948,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
             ),
           ),
         );
-        if (mounted) setState(() => _enSubPantalla = false);
+        if (mounted) { setState(() => _enSubPantalla = false); _enfocarSkuManualSinTeclado(); }
       }
       _skuController.clear();
     }
@@ -4903,7 +4989,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                     _laserController.repeat(reverse: true);
                   } else {
                     _laserController.stop();
-                    _skuManualFocus.requestFocus();
+                    _enfocarSkuManualSinTeclado();
                   }
                 },
               ),
@@ -4921,7 +5007,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
               value: _modoTrasvase,
               onChanged: (v) {
                 setState(() => _modoTrasvase = v);
-                if (!_camaraActiva) _skuManualFocus.requestFocus();
+                if (!_camaraActiva) _enfocarSkuManualSinTeclado();
               },
               activeColor: Colors.blueAccent,
             ),
@@ -4942,7 +5028,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                 onPressed: () async {
                   setState(() => _enSubPantalla = true);
                   await Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaIngreso(usuario: widget.usuarioRegistra, idTiendaGlobal: widget.idTiendaGlobal)));
-                  if (mounted) setState(() => _enSubPantalla = false);
+                  if (mounted) { setState(() => _enSubPantalla = false); _enfocarSkuManualSinTeclado(); }
                 },
               ),
             ),
@@ -5115,33 +5201,55 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: SizedBox(
-              height: 48,
-              child: TextField(
-                controller: _skuController,
-                focusNode: _skuManualFocus,
-                decoration: InputDecoration(
-                  hintText: _modoTrasvase ? 'Escanea SKU / UPC para Trasvase Rápido...' : 'SKU / UPC Manual...',
-                  filled: true,
-                  fillColor: Colors.white10,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                  suffixIcon: IconButton(
-                    icon: Icon(Icons.search, color: _modoTrasvase ? Colors.blueAccent : Colors.amber),
-                    onPressed: () {
-                      if (_skuController.text.isNotEmpty) {
-                        setState(() => _bloquearEscaneo = true);
-                        _procesarEscaneo(_skuController.text);
-                      }
-                    },
+            child: GestureDetector(
+              onDoubleTap: _activarTecladoNumericoPorDobleToque,
+              child: SizedBox(
+                height: 48,
+                child: TextField(
+                  controller: _skuController,
+                  focusNode: _skuManualFocus,
+                  autofocus: !_camaraActiva,
+                  showCursor: true,
+                  keyboardType: _tecladoNumericoManualActivo ? TextInputType.number : TextInputType.none,
+                  onTap: _manejarToqueRecuadroSkuManual,
+                  onChanged: (_) {
+                    if (!_tecladoNumericoManualActivo) {
+                      SystemChannels.textInput.invokeMethod('TextInput.hide');
+                    }
+                  },
+                  decoration: InputDecoration(
+                    hintText: _tecladoNumericoManualActivo
+                        ? '🔢 Teclado numérico activo (Escribe SKU / UPC)...'
+                        : (_modoTrasvase
+                            ? 'Escanea SKU / UPC (Doble toque para teclado numérico)...'
+                            : 'SKU / UPC Manual (Doble toque para teclado numérico)...'),
+                    filled: true,
+                    fillColor: Colors.white10,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                    suffixIcon: IconButton(
+                      icon: Icon(Icons.search, color: _modoTrasvase ? Colors.blueAccent : Colors.amber),
+                      onPressed: () {
+                        if (_skuController.text.isNotEmpty) {
+                          setState(() {
+                            _bloquearEscaneo = true;
+                            _tecladoNumericoManualActivo = false;
+                          });
+                          _procesarEscaneo(_skuController.text);
+                        }
+                      },
+                    ),
                   ),
+                  onSubmitted: (val) {
+                    if (val.isNotEmpty) {
+                      setState(() {
+                        _bloquearEscaneo = true;
+                        _tecladoNumericoManualActivo = false;
+                      });
+                      _procesarEscaneo(val);
+                    }
+                  },
                 ),
-                onSubmitted: (val) {
-                  if (val.isNotEmpty) {
-                    setState(() => _bloquearEscaneo = true);
-                    _procesarEscaneo(val);
-                  }
-                },
               ),
             ),
           ),
@@ -8731,6 +8839,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
   int? _filtroTipoMision;
+  int? _anioFiltroCaducidadMision;
+  int? _mesFiltroCaducidadMision;
   int? _anioFiltroHistMision = DateTime.now().year;
   int? _mesFiltroHistMision = DateTime.now().month;
   int? _semanaFiltroHistMision;
@@ -10117,8 +10227,19 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       }
                     }
 
+                    bool okCaducidadMision = true;
+                    if (_anioFiltroCaducidadMision != null || _mesFiltroCaducidadMision != null) {
+                      Timestamp? tsCadM = d['fechaCaducidad'] as Timestamp?;
+                      if (tsCadM == null) {
+                        okCaducidadMision = false;
+                      } else {
+                        DateTime dtCadM = tsCadM.toDate();
+                        if (_anioFiltroCaducidadMision != null && dtCadM.year != _anioFiltroCaducidadMision) okCaducidadMision = false;
+                        if (_mesFiltroCaducidadMision != null && dtCadM.month != _mesFiltroCaducidadMision) okCaducidadMision = false;
+                      }
+                    }
                     bool okBusqueda = _busquedaMision.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busquedaMision, d);
-                    return okProv && okMueble && okTipo && okFechaHist && okBusqueda;
+                    return okProv && okMueble && okTipo && okFechaHist && okCaducidadMision && okBusqueda;
                   }).toList();
 
                   listaFiltrada.sort((a, b) {
@@ -10138,7 +10259,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       ? listaFiltrada.take(kLimiteHistorialMisiones).toList()
                       : listaFiltrada;
 
-                  bool hayFiltrosActivos = _busquedaMision.isNotEmpty || _filtroProveedorMision != null ||
+                  bool hayFiltrosActivos = _busquedaMision.isNotEmpty || _anioFiltroCaducidadMision != null || _mesFiltroCaducidadMision != null || _filtroProveedorMision != null ||
                       _filtroMuebleMision != null ||
                       _filtroTipoMision != null ||
                       (_verHistorial && (_anioFiltroHistMision != hoy.year || _mesFiltroHistMision != hoy.month || _semanaFiltroHistMision != null));
@@ -10368,7 +10489,87 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 ),
                               ),
                               const SizedBox(height: 6),
-                              // RENGLÓN 2: PROVEEDOR (100% ANCHO)
+                              // RENGLÓN CADUCIDAD DE LA MISIÓN: AÑO Y MES (Por defecto: Todos los años y Todos los meses)
+                                          const Padding(
+                                            padding: EdgeInsets.only(left: 4, bottom: 3),
+                                            child: Text('Filtro por Caducidad de la Misión (Año y Mes)', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                          ),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Container(
+                                                  height: 40,
+                                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white10,
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    border: Border.all(color: _anioFiltroCaducidadMision != null ? Colors.amber : Colors.white24),
+                                                  ),
+                                                  child: DropdownButtonHideUnderline(
+                                                    child: DropdownButton<int?>(
+                                                      isExpanded: true,
+                                                      dropdownColor: const Color(0xFF2C2C2C),
+                                                      value: _anioFiltroCaducidadMision,
+                                                      items: [
+                                                        const DropdownMenuItem<int?>(
+                                                          value: null,
+                                                          child: Text('Año: Todos los años', style: TextStyle(fontSize: 11.5, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                                        ),
+                                                        ...({
+                                                          hoy.year - 1,
+                                                          hoy.year,
+                                                          hoy.year + 1,
+                                                          hoy.year + 2,
+                                                          hoy.year + 3,
+                                                          ...baseDocs
+                                                              .map((doc) => ((doc.data() as Map<String, dynamic>)['fechaCaducidad'] as Timestamp?)?.toDate().year)
+                                                              .whereType<int>(),
+                                                        }.toList()
+                                                              ..sort())
+                                                            .map((a) => DropdownMenuItem<int?>(
+                                                                  value: a,
+                                                                  child: Text('Año: $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                                )),
+                                                      ],
+                                                      onChanged: (val) => setState(() => _anioFiltroCaducidadMision = val),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Container(
+                                                  height: 40,
+                                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white10,
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    border: Border.all(color: _mesFiltroCaducidadMision != null ? Colors.amber : Colors.white24),
+                                                  ),
+                                                  child: DropdownButtonHideUnderline(
+                                                    child: DropdownButton<int?>(
+                                                      isExpanded: true,
+                                                      dropdownColor: const Color(0xFF2C2C2C),
+                                                      value: _mesFiltroCaducidadMision,
+                                                      items: [
+                                                        const DropdownMenuItem<int?>(
+                                                          value: null,
+                                                          child: Text('Mes: Todos los meses', style: TextStyle(fontSize: 11.5, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                                        ),
+                                                        ..._nombresMesesMision.entries.map((e) => DropdownMenuItem<int?>(
+                                                              value: e.key,
+                                                              child: Text('Mes: ${e.value}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                            )),
+                                                      ],
+                                                      onChanged: (val) => setState(() => _mesFiltroCaducidadMision = val),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          // RENGLÓN 2: PROVEEDOR (100% ANCHO)
                               const Padding(
                                 padding: EdgeInsets.only(left: 4, bottom: 3),
                                 child: Text('Filtro Proveedor', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
@@ -10428,6 +10629,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                               _filtroProveedorMision = null;
                                               _filtroMuebleMision = null;
                                               _filtroTipoMision = null;
+                                              _anioFiltroCaducidadMision = null;
+                                              _mesFiltroCaducidadMision = null;
                                               _anioFiltroHistMision = hoy.year;
                                               _mesFiltroHistMision = hoy.month;
                                               _semanaFiltroHistMision = null;
@@ -10977,10 +11180,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   int? _filtroMes;
   bool _filtroSobrestockIA = false;
 
-  // Filtro de captura
+  // Modo de visualización de la lista: 'caducidad' (default) o 'captura'
+  String _modoVisualizacionSabana = 'caducidad';
+
+  // Filtro de captura (Año, Mes, Días y Horas desplegables con doble toque)
   int? _filtroCapturaAnio;
   int? _filtroCapturaMes;
   Set<int> _filtroCapturaDias = {};
+  Map<int, Set<String>> _filtroCapturaHorasPorDia = {};
 
   // Paginación de 50 en 50 para lotes próximos a 3 meses
   static const int kPasoPaginacionLotes = 50;
@@ -11047,7 +11254,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   }
 
   bool get _tieneFiltroCapturaActivo =>
-      _filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty;
+      _filtroCapturaAnio != null ||
+      _filtroCapturaMes != null ||
+      _filtroCapturaDias.isNotEmpty ||
+      _filtroCapturaHorasPorDia.isNotEmpty;
 
   String _textoBotonFiltroCaptura() {
     if (!_tieneFiltroCapturaActivo) {
@@ -11060,48 +11270,102 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       var diasOrd = _filtroCapturaDias.toList()..sort();
       partes.add('Días: ${diasOrd.join(", ")}');
     }
+    int totalHorasFiltro = 0;
+    for (var hSet in _filtroCapturaHorasPorDia.values) {
+      totalHorasFiltro += hSet.length;
+    }
+    if (totalHorasFiltro > 0) {
+      partes.add('$totalHorasFiltro hr(s)');
+    }
     return 'Captura: ${partes.join(" • ")}';
   }
 
   void _abrirSelectorDinamicoFechaCaptura(List<QueryDocumentSnapshot> todosDocs) {
-    List<DateTime> fechasReales = [];
+    List<Map<String, dynamic>> registrosConFecha = [];
     for (var doc in todosDocs) {
       var d = doc.data() as Map<String, dynamic>;
       Timestamp? ts = d['fechaCaptura'] as Timestamp?;
       if (ts != null) {
-        fechasReales.add(ts.toDate());
+        registrosConFecha.add({
+          'fecha': ts.toDate(),
+          'capturista': _obtenerPrimerNombre(d['capturista']),
+          'descripcion': (d['descripcion'] ?? d['sku'] ?? '').toString(),
+          'cantidad': (d['cantidad'] ?? 1) as int,
+        });
       }
     }
 
     int anioCurso = DateTime.now().year;
     int mesCurso = DateTime.now().month;
 
-    List<int> aniosDisp = {anioCurso, ...fechasReales.map((f) => f.year)}.toList()
+    List<int> aniosDisp = {
+      anioCurso,
+      ...registrosConFecha.map((r) => (r['fecha'] as DateTime).year),
+    }.toList()
       ..sort((a, b) => b.compareTo(a));
 
-    // Inicia siempre con el año y mes en curso hasta que el usuario decida cambiarlo
     int? tempAnio = _tieneFiltroCapturaActivo ? _filtroCapturaAnio : anioCurso;
     int? tempMes = _tieneFiltroCapturaActivo ? _filtroCapturaMes : mesCurso;
     Set<int> tempDias = Set<int>.from(_filtroCapturaDias);
+    Map<int, Set<String>> tempHorasPorDia = {};
+    for (var entry in _filtroCapturaHorasPorDia.entries) {
+      tempHorasPorDia[entry.key] = Set<String>.from(entry.value);
+    }
+
+    Set<int> diasDesplegadosHoras = {};
+    Map<int, DateTime> ultimoToqueDiaNombre = {};
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) {
-          List<DateTime> filtradasPorAnio = fechasReales.where((f) => tempAnio == null || f.year == tempAnio).toList();
+          var filtradasPorAnio = registrosConFecha.where((r) {
+            DateTime f = r['fecha'] as DateTime;
+            return tempAnio == null || f.year == tempAnio;
+          }).toList();
+
           List<int> mesesDisp = {
             if (tempMes != null) tempMes!,
             mesCurso,
-            ...filtradasPorAnio.map((f) => f.month),
+            ...filtradasPorAnio.map((r) => (r['fecha'] as DateTime).month),
           }.toList()
             ..sort();
 
-          List<DateTime> filtradasPorAnioYMes = filtradasPorAnio.where((f) => tempMes == null || f.month == tempMes).toList();
+          var filtradasPorAnioYMes = filtradasPorAnio.where((r) {
+            DateTime f = r['fecha'] as DateTime;
+            return tempMes == null || f.month == tempMes;
+          }).toList();
+
           Map<int, int> lotesPorDia = {};
-          for (var f in filtradasPorAnioYMes) {
-            lotesPorDia[f.day] = (lotesPorDia[f.day] ?? 0) + 1;
+          Map<int, Map<String, int>> lotesPorDiaYHora = {};
+          Map<int, Map<String, Set<String>>> capturistasPorDiaYHora = {};
+
+          for (var r in filtradasPorAnioYMes) {
+            DateTime f = r['fecha'] as DateTime;
+            int dia = f.day;
+            String horaStr = "${f.hour.toString().padLeft(2, '0')}:${f.minute.toString().padLeft(2, '0')}";
+            String cap = r['capturista'] as String;
+
+            lotesPorDia[dia] = (lotesPorDia[dia] ?? 0) + 1;
+            lotesPorDiaYHora.putIfAbsent(dia, () => {});
+            lotesPorDiaYHora[dia]![horaStr] = (lotesPorDiaYHora[dia]![horaStr] ?? 0) + 1;
+
+            capturistasPorDiaYHora.putIfAbsent(dia, () => {});
+            capturistasPorDiaYHora[dia]!.putIfAbsent(horaStr, () => {});
+            capturistasPorDiaYHora[dia]![horaStr]!.add(cap);
           }
+
           List<int> diasDisponibles = lotesPorDia.keys.toList()..sort();
+
+          void alternarDespliegueHoras(int dia) {
+            setModalState(() {
+              if (diasDesplegadosHoras.contains(dia)) {
+                diasDesplegadosHoras.remove(dia);
+              } else {
+                diasDesplegadosHoras.add(dia);
+              }
+            });
+          }
 
           return AlertDialog(
             backgroundColor: const Color(0xFF1E1E24),
@@ -11111,14 +11375,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               style: TextStyle(color: Colors.cyanAccent, fontSize: 15, fontWeight: FontWeight.bold),
             ),
             content: SizedBox(
-              width: 440,
-              height: 390,
+              width: 460,
+              height: 420,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Al aplicar este filtro se ignoran los filtros de caducidad para mostrar todo lo capturado en la fecha elegida.',
-                    style: TextStyle(color: Colors.white60, fontSize: 10),
+                    '💡 Tip: Marca la casilla derecha para seleccionar el día, o da DOBLE TOQUE en el nombre del día para desplegar las horas en que se capturaron.',
+                    style: TextStyle(color: Colors.amberAccent, fontSize: 10.5, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -11152,6 +11416,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     setModalState(() {
                                       tempAnio = val;
                                       tempDias.clear();
+                                      tempHorasPorDia.clear();
+                                      diasDesplegadosHoras.clear();
                                     });
                                   },
                                 ),
@@ -11190,6 +11456,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     setModalState(() {
                                       tempMes = val;
                                       tempDias.clear();
+                                      tempHorasPorDia.clear();
+                                      diasDesplegadosHoras.clear();
                                     });
                                   },
                                 ),
@@ -11200,13 +11468,15 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Días con Capturas (Selección múltiple):',
-                        style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                      const Expanded(
+                        child: Text(
+                          'Días con Capturas (Doble toque en el día = ver horas):',
+                          style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
                       ),
                       Row(
                         children: [
@@ -11218,7 +11488,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                           const SizedBox(width: 6),
                           TextButton(
                             style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                            onPressed: () => setModalState(() => tempDias.clear()),
+                            onPressed: () => setModalState(() {
+                              tempDias.clear();
+                              tempHorasPorDia.clear();
+                            }),
                             child: const Text('Limpiar', style: TextStyle(color: Colors.white54, fontSize: 11)),
                           ),
                         ],
@@ -11241,37 +11514,159 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               int dia = diasDisponibles[idx];
                               int cantLotes = lotesPorDia[dia] ?? 0;
                               bool marcado = tempDias.contains(dia);
+                              bool horasAbiertas = diasDesplegadosHoras.contains(dia);
+                              var mapaHoras = lotesPorDiaYHora[dia] ?? {};
+                              var listaHoras = mapaHoras.keys.toList()..sort();
+                              Set<String> horasElegidasDia = tempHorasPorDia[dia] ?? {};
+
                               return Card(
                                 elevation: 0,
-                                color: marcado ? Colors.cyanAccent.withOpacity(0.18) : Colors.white10,
-                                margin: const EdgeInsets.symmetric(vertical: 3),
-                                child: CheckboxListTile(
-                                  dense: true,
-                                  visualDensity: VisualDensity.compact,
-                                  activeColor: Colors.cyanAccent,
-                                  checkColor: Colors.black,
-                                  value: marcado,
-                                  title: Text(
-                                    'Día ${dia.toString().padLeft(2, '0')}',
-                                    style: TextStyle(
-                                      color: marcado ? Colors.cyanAccent : Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
+                                color: marcado ? Colors.cyanAccent.withOpacity(0.16) : Colors.white10,
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  side: BorderSide(
+                                    color: horasAbiertas ? Colors.amber : (marcado ? Colors.cyanAccent : Colors.white12),
+                                    width: horasAbiertas ? 1.4 : 1.0,
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      child: Row(
+                                        children: [
+                                          // DOBLE TOQUE EXCLUSIVO EN EL NOMBRE DEL DÍA PARA DESPLEGAR HORAS
+                                          Expanded(
+                                            child: GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
+                                              onDoubleTap: () => alternarDespliegueHoras(dia),
+                                              onTap: () {
+                                                DateTime ahora = DateTime.now();
+                                                DateTime? ult = ultimoToqueDiaNombre[dia];
+                                                if (ult != null && ahora.difference(ult).inMilliseconds < 420) {
+                                                  ultimoToqueDiaNombre.remove(dia);
+                                                  alternarDespliegueHoras(dia);
+                                                } else {
+                                                  ultimoToqueDiaNombre[dia] = ahora;
+                                                }
+                                              },
+                                              child: Padding(
+                                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Text(
+                                                          'Día ${dia.toString().padLeft(2, '0')}',
+                                                          style: TextStyle(
+                                                            color: marcado ? Colors.cyanAccent : Colors.white,
+                                                            fontWeight: FontWeight.bold,
+                                                            fontSize: 13.5,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.amber.withOpacity(0.15),
+                                                            borderRadius: BorderRadius.circular(6),
+                                                          ),
+                                                          child: Text(
+                                                            horasAbiertas ? '▲ Ocultar horas' : 'Doble toque = ${listaHoras.length} hr(s)',
+                                                            style: const TextStyle(color: Colors.amberAccent, fontSize: 9.5, fontWeight: FontWeight.bold),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      '$cantLotes lote(s) capturado(s)' +
+                                                          (horasElegidasDia.isNotEmpty ? ' • Filtrando ${horasElegidasDia.length} hora(s)' : ''),
+                                                      style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          // CASILLA DE SELECCIÓN INDEPENDIENTE A LA DERECHA
+                                          Checkbox(
+                                            visualDensity: VisualDensity.compact,
+                                            activeColor: Colors.cyanAccent,
+                                            checkColor: Colors.black,
+                                            value: marcado,
+                                            onChanged: (v) {
+                                              setModalState(() {
+                                                if (v == true) {
+                                                  tempDias.add(dia);
+                                                } else {
+                                                  tempDias.remove(dia);
+                                                  tempHorasPorDia.remove(dia);
+                                                }
+                                              });
+                                            },
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                  subtitle: Text(
-                                    '$cantLotes lote(s) capturado(s)',
-                                    style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
-                                  ),
-                                  onChanged: (v) {
-                                    setModalState(() {
-                                      if (v == true) {
-                                        tempDias.add(dia);
-                                      } else {
-                                        tempDias.remove(dia);
-                                      }
-                                    });
-                                  },
+                                    if (horasAbiertas)
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.45),
+                                          borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              '🕒 Horas de captura registradas en este día (Toca una hora si deseas filtrar solo ese horario):',
+                                              style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Wrap(
+                                              spacing: 6,
+                                              runSpacing: 6,
+                                              children: listaHoras.map((hStr) {
+                                                int cHora = mapaHoras[hStr] ?? 0;
+                                                String caps = (capturistasPorDiaYHora[dia]?[hStr] ?? {}).join('/');
+                                                bool horaSel = horasElegidasDia.contains(hStr);
+                                                return FilterChip(
+                                                  selected: horaSel,
+                                                  selectedColor: Colors.amber,
+                                                  checkmarkColor: Colors.black,
+                                                  backgroundColor: Colors.white10,
+                                                  label: Text(
+                                                    '$hStr ($cHora lotes • $caps)',
+                                                    style: TextStyle(
+                                                      fontSize: 10.5,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: horaSel ? Colors.black : Colors.white,
+                                                    ),
+                                                  ),
+                                                  onSelected: (sel) {
+                                                    setModalState(() {
+                                                      var setH = tempHorasPorDia.putIfAbsent(dia, () => {});
+                                                      if (sel) {
+                                                        setH.add(hStr);
+                                                        tempDias.add(dia);
+                                                      } else {
+                                                        setH.remove(hStr);
+                                                        if (setH.isEmpty) tempHorasPorDia.remove(dia);
+                                                      }
+                                                    });
+                                                  },
+                                                );
+                                              }).toList(),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               );
                             },
@@ -11287,6 +11682,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     _filtroCapturaAnio = null;
                     _filtroCapturaMes = null;
                     _filtroCapturaDias.clear();
+                    _filtroCapturaHorasPorDia.clear();
                     _limiteLotesMostrados = kPasoPaginacionLotes;
                   });
                   Navigator.pop(ctx);
@@ -11304,6 +11700,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     _filtroCapturaAnio = tempAnio;
                     _filtroCapturaMes = tempMes;
                     _filtroCapturaDias = tempDias;
+                    _filtroCapturaHorasPorDia = tempHorasPorDia;
                     _limiteLotesMostrados = kPasoPaginacionLotes;
                   });
                   Navigator.pop(ctx);
@@ -11328,6 +11725,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       _filtroCapturaAnio = null;
       _filtroCapturaMes = null;
       _filtroCapturaDias.clear();
+      _filtroCapturaHorasPorDia.clear();
       _filtroGrupo = null;
       _limiteLotesMostrados = kPasoPaginacionLotes;
     });
@@ -12273,16 +12671,21 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
             }
 
-            // Si el Filtro de Captura está activo, ignora los filtros de Fecha de Caducidad (Año/Mes/3 meses)
-            if (_tieneFiltroCapturaActivo) {
+            // Si el Filtro de Captura está activo o el Modo de Visualización es por Fecha de Captura
+            if (_tieneFiltroCapturaActivo || _modoVisualizacionSabana == 'captura') {
               Timestamp? tsCap = data['fechaCaptura'] as Timestamp?;
-              if (tsCap == null) return false;
-              DateTime fCap = tsCap.toDate();
-              if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) return false;
-              if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) return false;
-              if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) return false;
-
-              return coincideBusqueda && coincideProv && coincideGpo && coincideMueble && coincideSobrestock && coincideDescuadre;
+              if (_tieneFiltroCapturaActivo) {
+                if (tsCap == null) return false;
+                DateTime fCap = tsCap.toDate();
+                if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) return false;
+                if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) return false;
+                if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) return false;
+                if (_filtroCapturaHorasPorDia.containsKey(fCap.day) && _filtroCapturaHorasPorDia[fCap.day]!.isNotEmpty) {
+                  String hDoc = "${fCap.hour.toString().padLeft(2, '0')}:${fCap.minute.toString().padLeft(2, '0')}";
+                  if (!_filtroCapturaHorasPorDia[fCap.day]!.contains(hDoc)) return false;
+                }
+                return coincideBusqueda && coincideProv && coincideGpo && coincideMueble && coincideSobrestock && coincideDescuadre;
+              }
             }
 
             bool coincideRiesgo = true;
@@ -12308,6 +12711,27 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 coincideSobrestock &&
                 coincideDescuadre;
           }).toList();
+
+          if (_modoVisualizacionSabana == 'captura' || _tieneFiltroCapturaActivo) {
+            docsFiltrados.sort((a, b) {
+              var dA = a.data() as Map<String, dynamic>;
+              var dB = b.data() as Map<String, dynamic>;
+              Timestamp? tA = dA['fechaCaptura'] as Timestamp?;
+              Timestamp? tB = dB['fechaCaptura'] as Timestamp?;
+              if (tA == null && tB == null) return 0;
+              if (tA == null) return 1;
+              if (tB == null) return -1;
+              return tB.compareTo(tA); // Más recientes primero
+            });
+          } else {
+            docsFiltrados.sort((a, b) {
+              var dA = a.data() as Map<String, dynamic>;
+              var dB = b.data() as Map<String, dynamic>;
+              Timestamp tA = (dA['fechaCaducidad'] as Timestamp?) ?? Timestamp.now();
+              Timestamp tB = (dB['fechaCaducidad'] as Timestamp?) ?? Timestamp.now();
+              return tA.compareTo(tB); // Caducidad más próxima primero (Default)
+            });
+          }
 
           int limiteActual = _limiteLotesMostrados;
           var docsFinales = docsFiltrados.take(limiteActual).toList();
@@ -12383,6 +12807,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     _filtroCapturaAnio = null;
                                     _filtroCapturaMes = null;
                                     _filtroCapturaDias.clear();
+      _filtroCapturaHorasPorDia.clear();
                                     _limiteLotesMostrados = kPasoPaginacionLotes;
                                   });
                                 },
@@ -12443,6 +12868,69 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             ],
                           ),
                           const SizedBox(height: 10),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text(
+                                  'Condición para visualizar la lista (Orden principal):',
+                                  style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 38,
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _modoVisualizacionSabana == 'caducidad' ? Colors.amber : Colors.white10,
+                                          foregroundColor: _modoVisualizacionSabana == 'caducidad' ? Colors.black : Colors.white70,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        icon: const Icon(Icons.event_busy, size: 15),
+                                        label: const Text(
+                                          '1. Caducidad Próxima',
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        onPressed: () => setState(() {
+                                          _modoVisualizacionSabana = 'caducidad';
+                                          _limiteLotesMostrados = kPasoPaginacionLotes;
+                                        }),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 38,
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _modoVisualizacionSabana == 'captura' ? Colors.cyanAccent : Colors.white10,
+                                          foregroundColor: _modoVisualizacionSabana == 'captura' ? Colors.black : Colors.white70,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        icon: const Icon(Icons.history_toggle_off, size: 15),
+                                        label: const Text(
+                                          '2. Fecha de Captura',
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        onPressed: () => setState(() {
+                                          _modoVisualizacionSabana = 'captura';
+                                          _limiteLotesMostrados = kPasoPaginacionLotes;
+                                        }),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),                          const SizedBox(height: 10),
                           TextField(
                             controller: _busquedaController,
                             decoration: InputDecoration(
@@ -12693,6 +13181,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                         _filtroCapturaAnio = null;
                                         _filtroCapturaMes = null;
                                         _filtroCapturaDias.clear();
+      _filtroCapturaHorasPorDia.clear();
                                         _limiteLotesMostrados = kPasoPaginacionLotes;
                                       }),
                                     ),

@@ -1507,28 +1507,41 @@ class _PantallaAdminState extends State<PantallaAdmin> {
 
         int misionesNuevas = 0;
         int misionesActualizadas = 0;
+        int descargadosAutomaticoUnicoLote = 0;
 
         for (var sku in ventasProcesadas.keys) {
           int porDescontar = ventasProcesadas[sku]!;
-          
+
           var querySnap = await _refTienda.collection('inventario_activo').where('sku', isEqualTo: sku).get();
-          
-          var docsOrdenados = querySnap.docs.toList();
+
+          var docsOrdenados = querySnap.docs.where((d) {
+            var m = d.data() as Map<String, dynamic>;
+            String u = (m['ubicacion'] ?? '').toString().toUpperCase();
+            int c = (m['cantidad'] ?? 0) as int;
+            return u != 'EN TRÁNSITO' && c > 0;
+          }).toList();
+
+          if (docsOrdenados.isEmpty) continue;
+
           docsOrdenados.sort((a, b) {
             var dataA = a.data() as Map<String, dynamic>;
             var dataB = b.data() as Map<String, dynamic>;
-            
+
             String ubiA = (dataA['ubicacion'] ?? '').toString().toUpperCase();
             String ubiB = (dataB['ubicacion'] ?? '').toString().toUpperCase();
-            
+
             int prioA = ubiA.contains('BODEGA') ? 1 : 0;
             int prioB = ubiB.contains('BODEGA') ? 1 : 0;
-            if (prioA != prioB) return prioA.compareTo(prioB); 
-            
+            if (prioA != prioB) return prioA.compareTo(prioB);
+
             Timestamp tA = dataA['fechaCaducidad'] ?? Timestamp.now();
             Timestamp tB = dataB['fechaCaducidad'] ?? Timestamp.now();
             return tA.compareTo(tB);
           });
+
+          // Si solo existe 1 lote activo en total (en piso, o en bodega si no hay en piso),
+          // se descarga en automático sin mandarlo a misiones. Si hay > 1 lote, sí se manda a revisión.
+          bool requiereMisionRevision = docsOrdenados.length > 1;
 
           for (var doc in docsOrdenados) {
             if (porDescontar <= 0) break;
@@ -1537,50 +1550,71 @@ class _PantallaAdminState extends State<PantallaAdmin> {
             int descAqui = (cantActual <= porDescontar) ? cantActual : porDescontar;
             porDescontar -= descAqui;
 
-            if (cantActual <= descAqui) await doc.reference.delete(); 
-            else await doc.reference.update({'cantidad': cantActual - descAqui, 'ventaDiariaPromedio': ventasProcesadas[sku]});
+            if (cantActual <= descAqui) {
+              await doc.reference.delete();
+            } else {
+              await doc.reference.update({
+                'cantidad': cantActual - descAqui,
+                'ventaDiariaPromedio': ventasProcesadas[sku],
+              });
+            }
 
             if (descAqui > 0) {
-              var misionesP = await _refTienda.collection('misiones_auditoria')
-                  .where('estado', isEqualTo: 'pendiente')
-                  .where('sku', isEqualTo: sku)
-                  .get();
-                  
-              var misionMatchea = misionesP.docs.where((m) {
-                  var md = m.data();
-                  return md['ubicacion'] == data['ubicacion'] && md['fechaCaducidad'] == data['fechaCaducidad'] && md['descontado'] != null; 
-              }).toList();
+              if (!requiereMisionRevision) {
+                descargadosAutomaticoUnicoLote++;
+              } else {
+                var misionesP = await _refTienda
+                    .collection('misiones_auditoria')
+                    .where('estado', isEqualTo: 'pendiente')
+                    .where('sku', isEqualTo: sku)
+                    .get();
 
-              if (misionMatchea.isNotEmpty) {
+                var misionMatchea = misionesP.docs.where((m) {
+                  var md = m.data();
+                  return md['ubicacion'] == data['ubicacion'] &&
+                      md['fechaCaducidad'] == data['fechaCaducidad'] &&
+                      md['descontado'] != null;
+                }).toList();
+
+                if (misionMatchea.isNotEmpty) {
                   var docMision = misionMatchea.first;
                   int descAnterior = docMision['descontado'] ?? 0;
                   await docMision.reference.update({
-                      'descontado': descAnterior + descAqui,
-                      'fechaGeneracion': FieldValue.serverTimestamp()
+                    'descontado': descAnterior + descAqui,
+                    'fechaGeneracion': FieldValue.serverTimestamp(),
                   });
                   misionesActualizadas++;
-              } else {
+                } else {
                   List<String> otrasUbis = docsOrdenados
                       .map((d) => ((d.data() as Map<String, dynamic>)['ubicacion'] ?? '').toString())
                       .where((u) => u.isNotEmpty && u != (data['ubicacion'] ?? ''))
                       .toSet()
                       .toList();
                   await _refTienda.collection('misiones_auditoria').add({
-                    'sku': sku, 'descripcion': data['descripcion'] ?? 'ND', 'ubicacion': data['ubicacion'] ?? 'ND',
-                    'descontado': descAqui, 'fechaCaducidad': data['fechaCaducidad'], 'estado': 'pendiente',
-                    'nombreProveedor': data['nombreProveedor'] ?? 'ND', 'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
+                    'sku': sku,
+                    'descripcion': data['descripcion'] ?? 'ND',
+                    'ubicacion': data['ubicacion'] ?? 'ND',
+                    'descontado': descAqui,
+                    'fechaCaducidad': data['fechaCaducidad'],
+                    'estado': 'pendiente',
+                    'nombreProveedor': data['nombreProveedor'] ?? 'ND',
+                    'nombreGpoArticulos': data['nombreGpoArticulos'] ?? 'SIN GRUPO',
                     'otrasUbicaciones': otrasUbis,
                     if (data['comentarioCorporativo'] != null) 'comentarioCorporativo': data['comentarioCorporativo'],
                     'fechaGeneracion': FieldValue.serverTimestamp(),
                   });
                   misionesNuevas++;
+                }
               }
             }
           }
         }
         await _refTienda.set({'ultima_carga_ventas': FieldValue.serverTimestamp()}, SetOptions(merge: true));
         await _obtenerUltimaCargaVentas();
-        setState(() { _procesando = false; _estado = "¡Cierre de Ventas Exitoso!\nMisiones Nuevas: $misionesNuevas | Actualizadas: $misionesActualizadas"; });
+        setState(() {
+          _procesando = false;
+          _estado = "¡Cierre de Ventas Exitoso!\n✅ Descarga automática (1 solo lote): $descargadosAutomaticoUnicoLote\n📋 Misiones revisión (>1 lote): $misionesNuevas nuevas | $misionesActualizadas actualizadas";
+        });
       }
     } catch (e) { setState(() { _procesando = false; _estado = "Error en ventas:\n$e"; }); }
   }

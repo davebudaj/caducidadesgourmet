@@ -30,10 +30,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   int? _filtroMes;
   bool _filtroSobrestockIA = false;
 
-  // Filtro de captura
+  // Modo de visualización de la lista: 'caducidad' (default) o 'captura'
+  String _modoVisualizacionSabana = 'caducidad';
+
+  // Filtro de captura (Año, Mes, Días y Horas desplegables con doble toque)
   int? _filtroCapturaAnio;
   int? _filtroCapturaMes;
   Set<int> _filtroCapturaDias = {};
+  Map<int, Set<String>> _filtroCapturaHorasPorDia = {};
 
   // Paginación de 50 en 50 para lotes próximos a 3 meses
   static const int kPasoPaginacionLotes = 50;
@@ -100,7 +104,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
   }
 
   bool get _tieneFiltroCapturaActivo =>
-      _filtroCapturaAnio != null || _filtroCapturaMes != null || _filtroCapturaDias.isNotEmpty;
+      _filtroCapturaAnio != null ||
+      _filtroCapturaMes != null ||
+      _filtroCapturaDias.isNotEmpty ||
+      _filtroCapturaHorasPorDia.isNotEmpty;
 
   String _textoBotonFiltroCaptura() {
     if (!_tieneFiltroCapturaActivo) {
@@ -113,48 +120,102 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       var diasOrd = _filtroCapturaDias.toList()..sort();
       partes.add('Días: ${diasOrd.join(", ")}');
     }
+    int totalHorasFiltro = 0;
+    for (var hSet in _filtroCapturaHorasPorDia.values) {
+      totalHorasFiltro += hSet.length;
+    }
+    if (totalHorasFiltro > 0) {
+      partes.add('$totalHorasFiltro hr(s)');
+    }
     return 'Captura: ${partes.join(" • ")}';
   }
 
   void _abrirSelectorDinamicoFechaCaptura(List<QueryDocumentSnapshot> todosDocs) {
-    List<DateTime> fechasReales = [];
+    List<Map<String, dynamic>> registrosConFecha = [];
     for (var doc in todosDocs) {
       var d = doc.data() as Map<String, dynamic>;
       Timestamp? ts = d['fechaCaptura'] as Timestamp?;
       if (ts != null) {
-        fechasReales.add(ts.toDate());
+        registrosConFecha.add({
+          'fecha': ts.toDate(),
+          'capturista': _obtenerPrimerNombre(d['capturista']),
+          'descripcion': (d['descripcion'] ?? d['sku'] ?? '').toString(),
+          'cantidad': (d['cantidad'] ?? 1) as int,
+        });
       }
     }
 
     int anioCurso = DateTime.now().year;
     int mesCurso = DateTime.now().month;
 
-    List<int> aniosDisp = {anioCurso, ...fechasReales.map((f) => f.year)}.toList()
+    List<int> aniosDisp = {
+      anioCurso,
+      ...registrosConFecha.map((r) => (r['fecha'] as DateTime).year),
+    }.toList()
       ..sort((a, b) => b.compareTo(a));
 
-    // Inicia siempre con el año y mes en curso hasta que el usuario decida cambiarlo
     int? tempAnio = _tieneFiltroCapturaActivo ? _filtroCapturaAnio : anioCurso;
     int? tempMes = _tieneFiltroCapturaActivo ? _filtroCapturaMes : mesCurso;
     Set<int> tempDias = Set<int>.from(_filtroCapturaDias);
+    Map<int, Set<String>> tempHorasPorDia = {};
+    for (var entry in _filtroCapturaHorasPorDia.entries) {
+      tempHorasPorDia[entry.key] = Set<String>.from(entry.value);
+    }
+
+    Set<int> diasDesplegadosHoras = {};
+    Map<int, DateTime> ultimoToqueDiaNombre = {};
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) {
-          List<DateTime> filtradasPorAnio = fechasReales.where((f) => tempAnio == null || f.year == tempAnio).toList();
+          var filtradasPorAnio = registrosConFecha.where((r) {
+            DateTime f = r['fecha'] as DateTime;
+            return tempAnio == null || f.year == tempAnio;
+          }).toList();
+
           List<int> mesesDisp = {
             if (tempMes != null) tempMes!,
             mesCurso,
-            ...filtradasPorAnio.map((f) => f.month),
+            ...filtradasPorAnio.map((r) => (r['fecha'] as DateTime).month),
           }.toList()
             ..sort();
 
-          List<DateTime> filtradasPorAnioYMes = filtradasPorAnio.where((f) => tempMes == null || f.month == tempMes).toList();
+          var filtradasPorAnioYMes = filtradasPorAnio.where((r) {
+            DateTime f = r['fecha'] as DateTime;
+            return tempMes == null || f.month == tempMes;
+          }).toList();
+
           Map<int, int> lotesPorDia = {};
-          for (var f in filtradasPorAnioYMes) {
-            lotesPorDia[f.day] = (lotesPorDia[f.day] ?? 0) + 1;
+          Map<int, Map<String, int>> lotesPorDiaYHora = {};
+          Map<int, Map<String, Set<String>>> capturistasPorDiaYHora = {};
+
+          for (var r in filtradasPorAnioYMes) {
+            DateTime f = r['fecha'] as DateTime;
+            int dia = f.day;
+            String horaStr = "${f.hour.toString().padLeft(2, '0')}:${f.minute.toString().padLeft(2, '0')}";
+            String cap = r['capturista'] as String;
+
+            lotesPorDia[dia] = (lotesPorDia[dia] ?? 0) + 1;
+            lotesPorDiaYHora.putIfAbsent(dia, () => {});
+            lotesPorDiaYHora[dia]![horaStr] = (lotesPorDiaYHora[dia]![horaStr] ?? 0) + 1;
+
+            capturistasPorDiaYHora.putIfAbsent(dia, () => {});
+            capturistasPorDiaYHora[dia]!.putIfAbsent(horaStr, () => {});
+            capturistasPorDiaYHora[dia]![horaStr]!.add(cap);
           }
+
           List<int> diasDisponibles = lotesPorDia.keys.toList()..sort();
+
+          void alternarDespliegueHoras(int dia) {
+            setModalState(() {
+              if (diasDesplegadosHoras.contains(dia)) {
+                diasDesplegadosHoras.remove(dia);
+              } else {
+                diasDesplegadosHoras.add(dia);
+              }
+            });
+          }
 
           return AlertDialog(
             backgroundColor: const Color(0xFF1E1E24),
@@ -164,14 +225,14 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               style: TextStyle(color: Colors.cyanAccent, fontSize: 15, fontWeight: FontWeight.bold),
             ),
             content: SizedBox(
-              width: 440,
-              height: 390,
+              width: 460,
+              height: 420,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Al aplicar este filtro se ignoran los filtros de caducidad para mostrar todo lo capturado en la fecha elegida.',
-                    style: TextStyle(color: Colors.white60, fontSize: 10),
+                    '💡 Tip: Marca la casilla derecha para seleccionar el día, o da DOBLE TOQUE en el nombre del día para desplegar las horas en que se capturaron.',
+                    style: TextStyle(color: Colors.amberAccent, fontSize: 10.5, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -205,6 +266,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     setModalState(() {
                                       tempAnio = val;
                                       tempDias.clear();
+                                      tempHorasPorDia.clear();
+                                      diasDesplegadosHoras.clear();
                                     });
                                   },
                                 ),
@@ -243,6 +306,8 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     setModalState(() {
                                       tempMes = val;
                                       tempDias.clear();
+                                      tempHorasPorDia.clear();
+                                      diasDesplegadosHoras.clear();
                                     });
                                   },
                                 ),
@@ -253,13 +318,15 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Días con Capturas (Selección múltiple):',
-                        style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                      const Expanded(
+                        child: Text(
+                          'Días con Capturas (Doble toque en el día = ver horas):',
+                          style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
                       ),
                       Row(
                         children: [
@@ -271,7 +338,10 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                           const SizedBox(width: 6),
                           TextButton(
                             style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                            onPressed: () => setModalState(() => tempDias.clear()),
+                            onPressed: () => setModalState(() {
+                              tempDias.clear();
+                              tempHorasPorDia.clear();
+                            }),
                             child: const Text('Limpiar', style: TextStyle(color: Colors.white54, fontSize: 11)),
                           ),
                         ],
@@ -294,37 +364,159 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                               int dia = diasDisponibles[idx];
                               int cantLotes = lotesPorDia[dia] ?? 0;
                               bool marcado = tempDias.contains(dia);
+                              bool horasAbiertas = diasDesplegadosHoras.contains(dia);
+                              var mapaHoras = lotesPorDiaYHora[dia] ?? {};
+                              var listaHoras = mapaHoras.keys.toList()..sort();
+                              Set<String> horasElegidasDia = tempHorasPorDia[dia] ?? {};
+
                               return Card(
                                 elevation: 0,
-                                color: marcado ? Colors.cyanAccent.withOpacity(0.18) : Colors.white10,
-                                margin: const EdgeInsets.symmetric(vertical: 3),
-                                child: CheckboxListTile(
-                                  dense: true,
-                                  visualDensity: VisualDensity.compact,
-                                  activeColor: Colors.cyanAccent,
-                                  checkColor: Colors.black,
-                                  value: marcado,
-                                  title: Text(
-                                    'Día ${dia.toString().padLeft(2, '0')}',
-                                    style: TextStyle(
-                                      color: marcado ? Colors.cyanAccent : Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
+                                color: marcado ? Colors.cyanAccent.withOpacity(0.16) : Colors.white10,
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  side: BorderSide(
+                                    color: horasAbiertas ? Colors.amber : (marcado ? Colors.cyanAccent : Colors.white12),
+                                    width: horasAbiertas ? 1.4 : 1.0,
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      child: Row(
+                                        children: [
+                                          // DOBLE TOQUE EXCLUSIVO EN EL NOMBRE DEL DÍA PARA DESPLEGAR HORAS
+                                          Expanded(
+                                            child: GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
+                                              onDoubleTap: () => alternarDespliegueHoras(dia),
+                                              onTap: () {
+                                                DateTime ahora = DateTime.now();
+                                                DateTime? ult = ultimoToqueDiaNombre[dia];
+                                                if (ult != null && ahora.difference(ult).inMilliseconds < 420) {
+                                                  ultimoToqueDiaNombre.remove(dia);
+                                                  alternarDespliegueHoras(dia);
+                                                } else {
+                                                  ultimoToqueDiaNombre[dia] = ahora;
+                                                }
+                                              },
+                                              child: Padding(
+                                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Text(
+                                                          'Día ${dia.toString().padLeft(2, '0')}',
+                                                          style: TextStyle(
+                                                            color: marcado ? Colors.cyanAccent : Colors.white,
+                                                            fontWeight: FontWeight.bold,
+                                                            fontSize: 13.5,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.amber.withOpacity(0.15),
+                                                            borderRadius: BorderRadius.circular(6),
+                                                          ),
+                                                          child: Text(
+                                                            horasAbiertas ? '▲ Ocultar horas' : 'Doble toque = ${listaHoras.length} hr(s)',
+                                                            style: const TextStyle(color: Colors.amberAccent, fontSize: 9.5, fontWeight: FontWeight.bold),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      '$cantLotes lote(s) capturado(s)' +
+                                                          (horasElegidasDia.isNotEmpty ? ' • Filtrando ${horasElegidasDia.length} hora(s)' : ''),
+                                                      style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          // CASILLA DE SELECCIÓN INDEPENDIENTE A LA DERECHA
+                                          Checkbox(
+                                            visualDensity: VisualDensity.compact,
+                                            activeColor: Colors.cyanAccent,
+                                            checkColor: Colors.black,
+                                            value: marcado,
+                                            onChanged: (v) {
+                                              setModalState(() {
+                                                if (v == true) {
+                                                  tempDias.add(dia);
+                                                } else {
+                                                  tempDias.remove(dia);
+                                                  tempHorasPorDia.remove(dia);
+                                                }
+                                              });
+                                            },
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                  subtitle: Text(
-                                    '$cantLotes lote(s) capturado(s)',
-                                    style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
-                                  ),
-                                  onChanged: (v) {
-                                    setModalState(() {
-                                      if (v == true) {
-                                        tempDias.add(dia);
-                                      } else {
-                                        tempDias.remove(dia);
-                                      }
-                                    });
-                                  },
+                                    if (horasAbiertas)
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.45),
+                                          borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              '🕒 Horas de captura registradas en este día (Toca una hora si deseas filtrar solo ese horario):',
+                                              style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Wrap(
+                                              spacing: 6,
+                                              runSpacing: 6,
+                                              children: listaHoras.map((hStr) {
+                                                int cHora = mapaHoras[hStr] ?? 0;
+                                                String caps = (capturistasPorDiaYHora[dia]?[hStr] ?? {}).join('/');
+                                                bool horaSel = horasElegidasDia.contains(hStr);
+                                                return FilterChip(
+                                                  selected: horaSel,
+                                                  selectedColor: Colors.amber,
+                                                  checkmarkColor: Colors.black,
+                                                  backgroundColor: Colors.white10,
+                                                  label: Text(
+                                                    '$hStr ($cHora lotes • $caps)',
+                                                    style: TextStyle(
+                                                      fontSize: 10.5,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: horaSel ? Colors.black : Colors.white,
+                                                    ),
+                                                  ),
+                                                  onSelected: (sel) {
+                                                    setModalState(() {
+                                                      var setH = tempHorasPorDia.putIfAbsent(dia, () => {});
+                                                      if (sel) {
+                                                        setH.add(hStr);
+                                                        tempDias.add(dia);
+                                                      } else {
+                                                        setH.remove(hStr);
+                                                        if (setH.isEmpty) tempHorasPorDia.remove(dia);
+                                                      }
+                                                    });
+                                                  },
+                                                );
+                                              }).toList(),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               );
                             },
@@ -340,6 +532,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     _filtroCapturaAnio = null;
                     _filtroCapturaMes = null;
                     _filtroCapturaDias.clear();
+                    _filtroCapturaHorasPorDia.clear();
                     _limiteLotesMostrados = kPasoPaginacionLotes;
                   });
                   Navigator.pop(ctx);
@@ -357,6 +550,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                     _filtroCapturaAnio = tempAnio;
                     _filtroCapturaMes = tempMes;
                     _filtroCapturaDias = tempDias;
+                    _filtroCapturaHorasPorDia = tempHorasPorDia;
                     _limiteLotesMostrados = kPasoPaginacionLotes;
                   });
                   Navigator.pop(ctx);
@@ -381,6 +575,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
       _filtroCapturaAnio = null;
       _filtroCapturaMes = null;
       _filtroCapturaDias.clear();
+      _filtroCapturaHorasPorDia.clear();
       _filtroGrupo = null;
       _limiteLotesMostrados = kPasoPaginacionLotes;
     });
@@ -1326,16 +1521,21 @@ class PantallaDashboardState extends State<PantallaDashboard> {
               coincideDescuadre = (ohSap >= 0 && totalFisico != ohSap);
             }
 
-            // Si el Filtro de Captura está activo, ignora los filtros de Fecha de Caducidad (Año/Mes/3 meses)
-            if (_tieneFiltroCapturaActivo) {
+            // Si el Filtro de Captura está activo o el Modo de Visualización es por Fecha de Captura
+            if (_tieneFiltroCapturaActivo || _modoVisualizacionSabana == 'captura') {
               Timestamp? tsCap = data['fechaCaptura'] as Timestamp?;
-              if (tsCap == null) return false;
-              DateTime fCap = tsCap.toDate();
-              if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) return false;
-              if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) return false;
-              if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) return false;
-
-              return coincideBusqueda && coincideProv && coincideGpo && coincideMueble && coincideSobrestock && coincideDescuadre;
+              if (_tieneFiltroCapturaActivo) {
+                if (tsCap == null) return false;
+                DateTime fCap = tsCap.toDate();
+                if (_filtroCapturaAnio != null && fCap.year != _filtroCapturaAnio) return false;
+                if (_filtroCapturaMes != null && fCap.month != _filtroCapturaMes) return false;
+                if (_filtroCapturaDias.isNotEmpty && !_filtroCapturaDias.contains(fCap.day)) return false;
+                if (_filtroCapturaHorasPorDia.containsKey(fCap.day) && _filtroCapturaHorasPorDia[fCap.day]!.isNotEmpty) {
+                  String hDoc = "${fCap.hour.toString().padLeft(2, '0')}:${fCap.minute.toString().padLeft(2, '0')}";
+                  if (!_filtroCapturaHorasPorDia[fCap.day]!.contains(hDoc)) return false;
+                }
+                return coincideBusqueda && coincideProv && coincideGpo && coincideMueble && coincideSobrestock && coincideDescuadre;
+              }
             }
 
             bool coincideRiesgo = true;
@@ -1361,6 +1561,27 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                 coincideSobrestock &&
                 coincideDescuadre;
           }).toList();
+
+          if (_modoVisualizacionSabana == 'captura' || _tieneFiltroCapturaActivo) {
+            docsFiltrados.sort((a, b) {
+              var dA = a.data() as Map<String, dynamic>;
+              var dB = b.data() as Map<String, dynamic>;
+              Timestamp? tA = dA['fechaCaptura'] as Timestamp?;
+              Timestamp? tB = dB['fechaCaptura'] as Timestamp?;
+              if (tA == null && tB == null) return 0;
+              if (tA == null) return 1;
+              if (tB == null) return -1;
+              return tB.compareTo(tA); // Más recientes primero
+            });
+          } else {
+            docsFiltrados.sort((a, b) {
+              var dA = a.data() as Map<String, dynamic>;
+              var dB = b.data() as Map<String, dynamic>;
+              Timestamp tA = (dA['fechaCaducidad'] as Timestamp?) ?? Timestamp.now();
+              Timestamp tB = (dB['fechaCaducidad'] as Timestamp?) ?? Timestamp.now();
+              return tA.compareTo(tB); // Caducidad más próxima primero (Default)
+            });
+          }
 
           int limiteActual = _limiteLotesMostrados;
           var docsFinales = docsFiltrados.take(limiteActual).toList();
@@ -1436,6 +1657,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                     _filtroCapturaAnio = null;
                                     _filtroCapturaMes = null;
                                     _filtroCapturaDias.clear();
+      _filtroCapturaHorasPorDia.clear();
                                     _limiteLotesMostrados = kPasoPaginacionLotes;
                                   });
                                 },
@@ -1496,6 +1718,69 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                             ],
                           ),
                           const SizedBox(height: 10),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4, bottom: 4),
+                                child: Text(
+                                  'Condición para visualizar la lista (Orden principal):',
+                                  style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 38,
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _modoVisualizacionSabana == 'caducidad' ? Colors.amber : Colors.white10,
+                                          foregroundColor: _modoVisualizacionSabana == 'caducidad' ? Colors.black : Colors.white70,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        icon: const Icon(Icons.event_busy, size: 15),
+                                        label: const Text(
+                                          '1. Caducidad Próxima',
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        onPressed: () => setState(() {
+                                          _modoVisualizacionSabana = 'caducidad';
+                                          _limiteLotesMostrados = kPasoPaginacionLotes;
+                                        }),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 38,
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _modoVisualizacionSabana == 'captura' ? Colors.cyanAccent : Colors.white10,
+                                          foregroundColor: _modoVisualizacionSabana == 'captura' ? Colors.black : Colors.white70,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        icon: const Icon(Icons.history_toggle_off, size: 15),
+                                        label: const Text(
+                                          '2. Fecha de Captura',
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        onPressed: () => setState(() {
+                                          _modoVisualizacionSabana = 'captura';
+                                          _limiteLotesMostrados = kPasoPaginacionLotes;
+                                        }),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),                          const SizedBox(height: 10),
                           TextField(
                             controller: _busquedaController,
                             decoration: InputDecoration(
@@ -1746,6 +2031,7 @@ class PantallaDashboardState extends State<PantallaDashboard> {
                                         _filtroCapturaAnio = null;
                                         _filtroCapturaMes = null;
                                         _filtroCapturaDias.clear();
+      _filtroCapturaHorasPorDia.clear();
                                         _limiteLotesMostrados = kPasoPaginacionLotes;
                                       }),
                                     ),

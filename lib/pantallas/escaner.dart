@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -35,6 +36,8 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
   late Animation<double> _laserAnimation;
   bool _bloquearEscaneo = false;
   bool _enSubPantalla = false;
+  bool _tecladoNumericoManualActivo = false;
+  DateTime? _ultimoToqueSkuManual;
 
   static const String kUbicacionTransito = 'EN TRÁNSITO';
 
@@ -53,8 +56,57 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
       if (camPref != null) _camaraActiva = camPref == 'true';
     } catch (_) {}
     _laserController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-    if (_camaraActiva) _laserController.repeat(reverse: true);
+    if (_camaraActiva) {
+      _laserController.repeat(reverse: true);
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _enfocarSkuManualSinTeclado();
+      });
+    }
     _laserAnimation = Tween<double>(begin: 10.0, end: 180.0).animate(_laserController);
+  }
+
+  @override
+  void didUpdateWidget(covariant PantallaEscaner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.estaActiva && !oldWidget.estaActiva && !_camaraActiva && !_enSubPantalla) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _enfocarSkuManualSinTeclado();
+      });
+    }
+  }
+
+  void _enfocarSkuManualSinTeclado() {
+    if (!mounted || _camaraActiva || _enSubPantalla) return;
+    setState(() => _tecladoNumericoManualActivo = false);
+    _skuManualFocus.requestFocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
+  void _activarTecladoNumericoPorDobleToque() {
+    if (!mounted) return;
+    setState(() => _tecladoNumericoManualActivo = true);
+    _skuManualFocus.unfocus();
+    Future.delayed(const Duration(milliseconds: 60), () {
+      if (!mounted) return;
+      _skuManualFocus.requestFocus();
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    });
+  }
+
+  void _manejarToqueRecuadroSkuManual() {
+    DateTime ahora = DateTime.now();
+    if (_ultimoToqueSkuManual != null &&
+        ahora.difference(_ultimoToqueSkuManual!).inMilliseconds < 420) {
+      _ultimoToqueSkuManual = null;
+      _activarTecladoNumericoPorDobleToque();
+    } else {
+      _ultimoToqueSkuManual = ahora;
+      if (!_tecladoNumericoManualActivo) {
+        _skuManualFocus.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    }
   }
 
   @override
@@ -86,7 +138,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
         ),
       ),
     );
-    if (mounted) setState(() => _enSubPantalla = false);
+    if (mounted) { setState(() => _enSubPantalla = false); _enfocarSkuManualSinTeclado(); }
   }
 
   Future<void> _irACarritoTemporal({String? destinoPreseleccionado}) async {
@@ -715,7 +767,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
     } finally {
       if (mounted) {
         setState(() => _enSubPantalla = false);
-        if (!_camaraActiva) _skuManualFocus.requestFocus();
+        if (!_camaraActiva) _enfocarSkuManualSinTeclado();
       }
     }
   }
@@ -771,7 +823,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                   _ubicacionDestino = muebleEscaneado;
                   _skuController.clear();
                 });
-                if (!_camaraActiva) _skuManualFocus.requestFocus();
+                if (!_camaraActiva) _enfocarSkuManualSinTeclado();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
@@ -823,7 +875,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
             ),
           ),
         );
-        if (mounted) setState(() => _enSubPantalla = false);
+        if (mounted) { setState(() => _enSubPantalla = false); _enfocarSkuManualSinTeclado(); }
       }
       _skuController.clear();
     }
@@ -864,7 +916,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                     _laserController.repeat(reverse: true);
                   } else {
                     _laserController.stop();
-                    _skuManualFocus.requestFocus();
+                    _enfocarSkuManualSinTeclado();
                   }
                 },
               ),
@@ -882,7 +934,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
               value: _modoTrasvase,
               onChanged: (v) {
                 setState(() => _modoTrasvase = v);
-                if (!_camaraActiva) _skuManualFocus.requestFocus();
+                if (!_camaraActiva) _enfocarSkuManualSinTeclado();
               },
               activeColor: Colors.blueAccent,
             ),
@@ -903,7 +955,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
                 onPressed: () async {
                   setState(() => _enSubPantalla = true);
                   await Navigator.push(context, MaterialPageRoute(builder: (context) => PantallaIngreso(usuario: widget.usuarioRegistra, idTiendaGlobal: widget.idTiendaGlobal)));
-                  if (mounted) setState(() => _enSubPantalla = false);
+                  if (mounted) { setState(() => _enSubPantalla = false); _enfocarSkuManualSinTeclado(); }
                 },
               ),
             ),
@@ -1076,33 +1128,55 @@ class _PantallaEscanerState extends State<PantallaEscaner> with SingleTickerProv
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: SizedBox(
-              height: 48,
-              child: TextField(
-                controller: _skuController,
-                focusNode: _skuManualFocus,
-                decoration: InputDecoration(
-                  hintText: _modoTrasvase ? 'Escanea SKU / UPC para Trasvase Rápido...' : 'SKU / UPC Manual...',
-                  filled: true,
-                  fillColor: Colors.white10,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                  suffixIcon: IconButton(
-                    icon: Icon(Icons.search, color: _modoTrasvase ? Colors.blueAccent : Colors.amber),
-                    onPressed: () {
-                      if (_skuController.text.isNotEmpty) {
-                        setState(() => _bloquearEscaneo = true);
-                        _procesarEscaneo(_skuController.text);
-                      }
-                    },
+            child: GestureDetector(
+              onDoubleTap: _activarTecladoNumericoPorDobleToque,
+              child: SizedBox(
+                height: 48,
+                child: TextField(
+                  controller: _skuController,
+                  focusNode: _skuManualFocus,
+                  autofocus: !_camaraActiva,
+                  showCursor: true,
+                  keyboardType: _tecladoNumericoManualActivo ? TextInputType.number : TextInputType.none,
+                  onTap: _manejarToqueRecuadroSkuManual,
+                  onChanged: (_) {
+                    if (!_tecladoNumericoManualActivo) {
+                      SystemChannels.textInput.invokeMethod('TextInput.hide');
+                    }
+                  },
+                  decoration: InputDecoration(
+                    hintText: _tecladoNumericoManualActivo
+                        ? '🔢 Teclado numérico activo (Escribe SKU / UPC)...'
+                        : (_modoTrasvase
+                            ? 'Escanea SKU / UPC (Doble toque para teclado numérico)...'
+                            : 'SKU / UPC Manual (Doble toque para teclado numérico)...'),
+                    filled: true,
+                    fillColor: Colors.white10,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                    suffixIcon: IconButton(
+                      icon: Icon(Icons.search, color: _modoTrasvase ? Colors.blueAccent : Colors.amber),
+                      onPressed: () {
+                        if (_skuController.text.isNotEmpty) {
+                          setState(() {
+                            _bloquearEscaneo = true;
+                            _tecladoNumericoManualActivo = false;
+                          });
+                          _procesarEscaneo(_skuController.text);
+                        }
+                      },
+                    ),
                   ),
+                  onSubmitted: (val) {
+                    if (val.isNotEmpty) {
+                      setState(() {
+                        _bloquearEscaneo = true;
+                        _tecladoNumericoManualActivo = false;
+                      });
+                      _procesarEscaneo(val);
+                    }
+                  },
                 ),
-                onSubmitted: (val) {
-                  if (val.isNotEmpty) {
-                    setState(() => _bloquearEscaneo = true);
-                    _procesarEscaneo(val);
-                  }
-                },
               ),
             ),
           ),

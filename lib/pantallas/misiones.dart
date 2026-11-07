@@ -32,6 +32,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
   String? _filtroProveedorMision;
   String? _filtroMuebleMision;
   int? _filtroTipoMision;
+  int? _anioFiltroCaducidadMision;
+  int? _mesFiltroCaducidadMision;
   int? _anioFiltroHistMision = DateTime.now().year;
   int? _mesFiltroHistMision = DateTime.now().month;
   int? _semanaFiltroHistMision;
@@ -1418,8 +1420,19 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       }
                     }
 
+                    bool okCaducidadMision = true;
+                    if (_anioFiltroCaducidadMision != null || _mesFiltroCaducidadMision != null) {
+                      Timestamp? tsCadM = d['fechaCaducidad'] as Timestamp?;
+                      if (tsCadM == null) {
+                        okCaducidadMision = false;
+                      } else {
+                        DateTime dtCadM = tsCadM.toDate();
+                        if (_anioFiltroCaducidadMision != null && dtCadM.year != _anioFiltroCaducidadMision) okCaducidadMision = false;
+                        if (_mesFiltroCaducidadMision != null && dtCadM.month != _mesFiltroCaducidadMision) okCaducidadMision = false;
+                      }
+                    }
                     bool okBusqueda = _busquedaMision.isEmpty || JerarquiaUbicacionHelper.evaluarConsultaLenguajeNaturalIA(_busquedaMision, d);
-                    return okProv && okMueble && okTipo && okFechaHist && okBusqueda;
+                    return okProv && okMueble && okTipo && okFechaHist && okCaducidadMision && okBusqueda;
                   }).toList();
 
                   listaFiltrada.sort((a, b) {
@@ -1439,7 +1452,7 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                       ? listaFiltrada.take(kLimiteHistorialMisiones).toList()
                       : listaFiltrada;
 
-                  bool hayFiltrosActivos = _busquedaMision.isNotEmpty || _filtroProveedorMision != null ||
+                  bool hayFiltrosActivos = _busquedaMision.isNotEmpty || _anioFiltroCaducidadMision != null || _mesFiltroCaducidadMision != null || _filtroProveedorMision != null ||
                       _filtroMuebleMision != null ||
                       _filtroTipoMision != null ||
                       (_verHistorial && (_anioFiltroHistMision != hoy.year || _mesFiltroHistMision != hoy.month || _semanaFiltroHistMision != null));
@@ -1669,7 +1682,87 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                 ),
                               ),
                               const SizedBox(height: 6),
-                              // RENGLÓN 2: PROVEEDOR (100% ANCHO)
+                              // RENGLÓN CADUCIDAD DE LA MISIÓN: AÑO Y MES (Por defecto: Todos los años y Todos los meses)
+                                          const Padding(
+                                            padding: EdgeInsets.only(left: 4, bottom: 3),
+                                            child: Text('Filtro por Caducidad de la Misión (Año y Mes)', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
+                                          ),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Container(
+                                                  height: 40,
+                                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white10,
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    border: Border.all(color: _anioFiltroCaducidadMision != null ? Colors.amber : Colors.white24),
+                                                  ),
+                                                  child: DropdownButtonHideUnderline(
+                                                    child: DropdownButton<int?>(
+                                                      isExpanded: true,
+                                                      dropdownColor: const Color(0xFF2C2C2C),
+                                                      value: _anioFiltroCaducidadMision,
+                                                      items: [
+                                                        const DropdownMenuItem<int?>(
+                                                          value: null,
+                                                          child: Text('Año: Todos los años', style: TextStyle(fontSize: 11.5, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                                        ),
+                                                        ...({
+                                                          hoy.year - 1,
+                                                          hoy.year,
+                                                          hoy.year + 1,
+                                                          hoy.year + 2,
+                                                          hoy.year + 3,
+                                                          ...baseDocs
+                                                              .map((doc) => ((doc.data() as Map<String, dynamic>)['fechaCaducidad'] as Timestamp?)?.toDate().year)
+                                                              .whereType<int>(),
+                                                        }.toList()
+                                                              ..sort())
+                                                            .map((a) => DropdownMenuItem<int?>(
+                                                                  value: a,
+                                                                  child: Text('Año: $a', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                                )),
+                                                      ],
+                                                      onChanged: (val) => setState(() => _anioFiltroCaducidadMision = val),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Container(
+                                                  height: 40,
+                                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white10,
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    border: Border.all(color: _mesFiltroCaducidadMision != null ? Colors.amber : Colors.white24),
+                                                  ),
+                                                  child: DropdownButtonHideUnderline(
+                                                    child: DropdownButton<int?>(
+                                                      isExpanded: true,
+                                                      dropdownColor: const Color(0xFF2C2C2C),
+                                                      value: _mesFiltroCaducidadMision,
+                                                      items: [
+                                                        const DropdownMenuItem<int?>(
+                                                          value: null,
+                                                          child: Text('Mes: Todos los meses', style: TextStyle(fontSize: 11.5, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                                        ),
+                                                        ..._nombresMesesMision.entries.map((e) => DropdownMenuItem<int?>(
+                                                              value: e.key,
+                                                              child: Text('Mes: ${e.value}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                            )),
+                                                      ],
+                                                      onChanged: (val) => setState(() => _mesFiltroCaducidadMision = val),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          // RENGLÓN 2: PROVEEDOR (100% ANCHO)
                               const Padding(
                                 padding: EdgeInsets.only(left: 4, bottom: 3),
                                 child: Text('Filtro Proveedor', style: TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold)),
@@ -1729,6 +1822,8 @@ class _PantallaMisionesState extends State<PantallaMisiones> {
                                               _filtroProveedorMision = null;
                                               _filtroMuebleMision = null;
                                               _filtroTipoMision = null;
+                                              _anioFiltroCaducidadMision = null;
+                                              _mesFiltroCaducidadMision = null;
                                               _anioFiltroHistMision = hoy.year;
                                               _mesFiltroHistMision = hoy.month;
                                               _semanaFiltroHistMision = null;
